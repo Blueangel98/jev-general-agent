@@ -260,7 +260,10 @@ const PAGE_CONTROL_STATE = `(() => {
     composer: Boolean(composer),
     composerLength: composer ? String(composer.value || composer.innerText || composer.textContent || "").length : 0,
     assistantCount: assistants.length,
-    generating: stopButton || streamingMarker || composerBusy,
+    // ChatGPT can leave the stop button visible after the final assistant
+    // message is already complete. Before any assistant message it is useful
+    // evidence; after that, rely on streaming/busy markers and stable text.
+    generating: (stopButton && assistants.length === 0) || streamingMarker || composerBusy,
     generationEvidence: { stopButton, streamingMarker, composerBusy }
   };
 })()`;
@@ -328,7 +331,7 @@ async function preferFastGeneration(client) {
     ].join(" ").trim();
     const button = [...document.querySelectorAll("button")]
       .filter(visible)
-      .find(element => /^(yüksek|high|thinking|reasoning|akıl yürütme)$/i.test(textOf(element)));
+      .find(element => /(?:^|\s)(yüksek|high|thinking|reasoning|akıl yürütme)(?:\s|$)/i.test(textOf(element)));
     if (!button) return { found: false };
     button.click();
     return { found: true, label: textOf(button) };
