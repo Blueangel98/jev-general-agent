@@ -1,5 +1,6 @@
 ﻿import http from "node:http";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { experienceContext } from "../memory/experience-store.mjs";
 
 const PORT =
@@ -20,6 +21,55 @@ const WORKSPACE_ROOT =
   process.cwd();
 
 let JEV_CALLS = 0;
+
+function fetchJevViaPowerShell(url, init) {
+  return new Promise((resolve, reject) => {
+    const script = [
+      "$payload = [Console]::In.ReadToEnd()",
+      "$key = [Environment]::GetEnvironmentVariable('TYPESAFE_API_KEY','Process')",
+      "$response = Invoke-RestMethod -Uri $env:JEV_TARGET_URL -Method Post -Headers @{ Authorization = ('Bearer ' + $key) } -ContentType 'application/json' -Body $payload -TimeoutSec 60",
+      "$response | ConvertTo-Json -Depth 100 -Compress"
+    ].join("; ");
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      env: { ...process.env, JEV_TARGET_URL: url },
+      windowsHide: true
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk.toString(); });
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code !== 0) {
+        reject(new Error(`PowerShell JEV transport failed: ${stderr.slice(0, 500)}`));
+        return;
+      }
+      resolve(new Response(stdout, { status: 200, headers: { "content-type": "application/json" } }));
+    });
+    child.stdin.end(String(init?.body || ""));
+  });
+}
+
+async function fetchJev(url, init) {
+  const transientStatuses = new Set([408, 425, 429, 500, 502, 503, 504]);
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await globalThis.fetch(url, init);
+      if (!transientStatuses.has(response.status) || attempt === 3) return response;
+      try { await response.arrayBuffer(); } catch {}
+      await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+    } catch (error) {
+      lastError = error;
+      if (attempt === 1 && process.platform === "win32") {
+        try { return await fetchJevViaPowerShell(url, init); } catch (fallbackError) { lastError = fallbackError; }
+      }
+      if (attempt === 3) throw lastError;
+      await new Promise(resolve => setTimeout(resolve, 250 * attempt));
+    }
+  }
+  throw lastError || new Error("Jev request failed");
+}
 
 // ============================================================
 // BASIC HTTP
@@ -2007,7 +2057,7 @@ async function askJevTestFailureDiagnosis(
     Date.now();
 
   const response =
-    await fetch(
+    await fetchJev(
       JEV_URL,
       {
         method:
@@ -3289,10 +3339,36 @@ function parseJevAnswer(
       0
     );
 
+  const readChoice = key => {
+    const item = data?.answers?.[key] ?? data?.[key] ?? {};
+    return item?.choice ?? item?.answer ?? item?.value ?? item?.selected ?? "unknown";
+  };
+
   return {
     choice,
-    confidence
+    confidence,
+    reasoning: {
+      taskIntent: readChoice("task_intent"),
+      scopeRisk: readChoice("scope_risk"),
+      verificationNeed: readChoice("verification_need")
+    }
   };
+}
+
+function applyReasoningPolicy(decision, state) {
+  const goal = String(state?.user_goal || "");
+  const explicitReadOnly = /(?:kod|code|dosya|file).{0,60}(?:değiştirme|değişiklik yapma|değişmesin|do not change|don't change|no changes)|(?:değiştirme|değişiklik yapma|değişmesin|do not change|don't change|no changes).{0,60}(?:kod|code|dosya|file)/iu.test(goal);
+
+  if (explicitReadOnly) {
+    decision.reasoning = {
+      ...decision.reasoning,
+      taskIntent: "investigate",
+      scopeRisk: "low",
+      verificationNeed: "none"
+    };
+  }
+
+  return decision;
 }
 
 async function askJev(
@@ -3318,7 +3394,11 @@ async function askJev(
     model:
       "jev-latest",
 
-    state,
+    state: {
+      ...state,
+      reasoning_contract:
+        "Decompose the request before acting. Prefer the smallest safe action, identify scope risk, and require semantic verification for behavioral changes."
+    },
 
     questions: {
       next_action: {
@@ -3329,6 +3409,39 @@ async function askJev(
           "You are the coding agent controller. Choose exactly one action from the provided criteria. If concrete actions are available, you MUST select one of them and continue autonomously. Never stop to ask the user when a safe concrete action is already available. Use actual tool evidence and never repeat completed work.",
 
         criteria
+      },
+
+      task_intent: {
+        type: "choice",
+        instructions: "Classify the user's primary development intent from the supplied task and evidence.",
+        criteria: {
+          investigate: "The user primarily asks to inspect, explain, diagnose, or report.",
+          change: "The user asks to add, modify, refactor, or repair code.",
+          verify: "The user primarily asks to run tests or validate an existing result.",
+          unknown: "The evidence does not establish the intent."
+        }
+      },
+
+      scope_risk: {
+        type: "choice",
+        instructions: "Estimate the change scope risk using only the current task and evidence.",
+        criteria: {
+          low: "Read-only inspection or a small isolated change with clear boundaries.",
+          medium: "A bounded code change requiring tests or several related files.",
+          high: "Broad, destructive, security-sensitive, dependency, deployment, or unclear change.",
+          unknown: "The evidence does not establish the risk."
+        }
+      },
+
+      verification_need: {
+        type: "choice",
+        instructions: "Choose the strongest verification requirement supported by the task.",
+        criteria: {
+          none: "Read-only reporting is sufficient and no state changes are requested.",
+          syntax: "Only syntax or static validation is justified by the explicit request.",
+          semantic: "Behavioral changes require project tests or an explicit acceptance command.",
+          unknown: "The verification requirement is not clear from the evidence."
+        }
       }
     }
   };
@@ -3339,7 +3452,7 @@ async function askJev(
     Date.now();
 
   const response =
-    await fetch(
+    await fetchJev(
       JEV_URL,
       {
         method:
@@ -3377,15 +3490,19 @@ async function askJev(
     JSON.parse(raw);
 
   const decision =
-    parseJevAnswer(
-      data
+    applyReasoningPolicy(
+      parseJevAnswer(data),
+      state
     );
 
   console.log(
     `[JEV] call=${JEV_CALLS}` +
     ` time_ms=${ms}` +
     ` choice=${decision.choice}` +
-    ` confidence=${decision.confidence}`
+    ` confidence=${decision.confidence}` +
+    ` intent=${decision.reasoning?.taskIntent}` +
+    ` risk=${decision.reasoning?.scopeRisk}` +
+    ` verification=${decision.reasoning?.verificationNeed}`
   );
 
   if (
@@ -3536,7 +3653,7 @@ async function askJevArchitectureSummary(
     Date.now();
 
   const response =
-    await fetch(
+    await fetchJev(
       JEV_URL,
       {
         method:

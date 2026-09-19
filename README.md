@@ -34,9 +34,11 @@ The key is stored only in the current Windows user's environment as `TYPESAFE_AP
 
 Each task can record a redacted result in `memory/task-experiences.jsonl`. Related prior results are supplied as evidence to future planning; they do not override current files or tests. This is persistent experience retrieval, not unattended model-weight training.
 
+JEV reasoning is implemented as a fast structured fan-out: the controller asks for the next action, task intent, scope risk, and verification requirement in one Typesafe request. The local agent then combines those decisions with tool evidence, child workers, tests, and rollback gates. On Windows, the native agent includes a PowerShell transport fallback for environments where Node's direct HTTPS path cannot reach the configured proxy.
+
 The code self-improvement path is bounded: candidate -> syntax/security/evaluation -> promote, reject, or rollback. Run `node self-improvement/manager.mjs test-cycle` to verify the rejection and rollback path. A trusted source change should be followed by `node self-improvement/manager.mjs rebaseline`.
 
-The agent does not claim parity with a frontier ChatGPT model. It provides the local equivalent workflow: inspect the selected workspace, edit through an isolated candidate, execute explicit validation commands, preserve evidence, and apply only a passing result.
+This does not train JEV into Codex/Astra or create new model weights. It provides an Astra-like development workflow around JEV: inspect the selected workspace, decompose the request, edit through an isolated candidate, execute explicit validation commands, preserve evidence, and apply only a passing result. JEV remains the configured structured-decision provider; it is not a general-purpose local text-generation model.
 
 ## GitHub publishing
 
