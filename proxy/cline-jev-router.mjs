@@ -34,7 +34,7 @@ const DIRECT_AUTONOMY_TIMEOUT_MS =
     300000,
     Number(
       process.env.JEV_DIRECT_AUTONOMY_TIMEOUT_MS ||
-      1200000
+      3600000
     )
   );
 const JEV_LIVE_CONSOLE =

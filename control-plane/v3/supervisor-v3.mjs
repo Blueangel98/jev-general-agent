@@ -200,7 +200,7 @@ async function acquire(taskId) {
       Number(
         process.env
           .JEV_TASK_QUEUE_WAIT_MS ||
-        1200000
+        3600000
       )
     );
 
@@ -424,7 +424,7 @@ function runTask(args, taskId, attempt) {
 
     const timer = setTimeout(() => {
       try { child.kill(); } catch {}
-    }, Number(process.env.JEV_DIRECT_AUTONOMY_TIMEOUT_MS || 1200000));
+    }, Number(process.env.JEV_DIRECT_AUTONOMY_TIMEOUT_MS || 3600000));
 
     child.on("close", code => {
       clearTimeout(timer);

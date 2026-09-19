@@ -3,7 +3,7 @@
   "mode": "supervised-browser-worker",
   "localFallback": false,
   "provider": "chatgpt-browser",
-  "timeoutMs": 120000,
+  "timeoutMs": 3600000,
   "maxCandidates": 3,
   "allowedOperations": [
     "create_file",

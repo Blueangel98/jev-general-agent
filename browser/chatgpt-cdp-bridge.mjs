@@ -483,7 +483,9 @@ async function send(prompt) {
       }
     }
 
-    const deadline = Date.now() + Number(process.env.JEV_BROWSER_RESPONSE_TIMEOUT_MS || 180000);
+    // ChatGPT may spend several minutes reasoning or writing code. Do not
+    // classify a still-running response as a failed synthesis too early.
+    const deadline = Date.now() + Number(process.env.JEV_BROWSER_RESPONSE_TIMEOUT_MS || 3600000);
     let sawAssistant = false;
     let sawGenerating = false;
     let idlePolls = 0;

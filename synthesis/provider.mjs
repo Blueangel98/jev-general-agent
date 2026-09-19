@@ -252,7 +252,7 @@ function synthFallbackTimeoutMs() {
     Number(
       process.env.JEV_SYNTH_FALLBACK_TIMEOUT_MS ||
       process.env.JEV_SYNTH_TIMEOUT_MS ||
-      20000
+      3600000
     );
 
   return Number.isFinite(
@@ -260,7 +260,7 @@ function synthFallbackTimeoutMs() {
   ) &&
     value > 0
       ? value
-      : 20000;
+      : 3600000;
 }
 
 function synthTransientError(
@@ -495,7 +495,7 @@ export function synthesisConfig() {
     timeoutMs:
       Number(
         process.env.JEV_SYNTH_TIMEOUT_MS ||
-        20000
+        3600000
       ),
 
     maxAttempts:

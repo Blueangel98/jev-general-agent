@@ -231,7 +231,10 @@ writeJson(specFile, {
   priorExperienceIncluded: Boolean(priorExperience),
   maxCandidates: 1,
   maxSynthesisRounds: 1,
-  timeoutMs: 180000
+  timeoutMs: Number(
+    process.env.JEV_DIRECT_AUTONOMY_TIMEOUT_MS ||
+    3600000
+  )
 });
 
 console.log(

@@ -22,7 +22,7 @@ const JEV_KEY = process.env.TYPESAFE_API_KEY || "";
 const SYNTH_BASE = (process.env.JEV_SYNTH_BASE_URL || "").replace(/\/+$/, "");
 const SYNTH_MODEL = process.env.JEV_SYNTH_MODEL || JEV_MODEL;
 const SYNTH_KEY = process.env.JEV_SYNTH_API_KEY || "";
-const SYNTH_TIMEOUT = Number(process.env.JEV_SYNTH_TIMEOUT_MS || 180000);
+const SYNTH_TIMEOUT = Number(process.env.JEV_SYNTH_TIMEOUT_MS || 3600000);
 
 const PROTECTED = new Set([
   "supervisor.mjs",

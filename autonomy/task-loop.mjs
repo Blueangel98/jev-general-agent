@@ -613,7 +613,8 @@ async function main() {
               timeoutMs:
                 Number(
                   spec.timeoutMs ||
-                  120000
+                  process.env.JEV_DIRECT_AUTONOMY_TIMEOUT_MS ||
+                  3600000
                 ),
 
               allowSyntaxOnly:
@@ -792,7 +793,8 @@ const verification = runValidation(workspace, applied.changed, {
           timeoutMs:
             Number(
               spec.timeoutMs ||
-              120000
+              process.env.JEV_DIRECT_AUTONOMY_TIMEOUT_MS ||
+              3600000
             ),
   baselineProjectTests:
     Array.isArray(selectedReport?.baselineProjectTests)
