@@ -250,7 +250,7 @@ const PAGE_CONTROL_STATE = `(() => {
     )
   );
   const streamingMarker = Boolean(document.querySelector(
-    '[aria-busy="true"], [data-is-streaming="true"], [data-streaming="true"], [data-state="streaming"], [class*="result-streaming"], [class*="streaming"]'
+    '[aria-busy="true"], [data-is-streaming="true"], [data-streaming="true"], [data-state="streaming"]'
   ));
   const composerBusy = composer?.getAttribute("aria-busy") === "true";
   const loginText = /log in|sign up|giri[sş]|kay[ıi]t ol/i.test(body) && !composer;

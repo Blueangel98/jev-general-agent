@@ -87,6 +87,55 @@ function repairLikelyJson(raw) {
   return output;
 }
 
+function decodeBase64Text(value, field) {
+  if (typeof value !== "string") {
+    throw new Error(`${field} must be standard base64 text`);
+  }
+  const compact = value.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || compact.length % 4 === 1) {
+    throw new Error(`${field} must be standard base64 text`);
+  }
+  const decoded = Buffer.from(compact, "base64").toString("utf8");
+  const canonical = Buffer.from(decoded, "utf8").toString("base64");
+  if (canonical.replace(/=+$/, "") !== compact.replace(/=+$/, "")) {
+    throw new Error(`${field} is not valid UTF-8 base64`);
+  }
+  return decoded;
+}
+
+function normalizeEncodedPlan(plan) {
+  if (!plan || !Array.isArray(plan.candidates)) return plan;
+  return {
+    ...plan,
+    candidates: plan.candidates.map(candidate => ({
+      ...candidate,
+      operations: (Array.isArray(candidate.operations)
+        ? candidate.operations
+        : candidate.operations && typeof candidate.operations === "object"
+          ? [candidate.operations]
+          : candidate.operations) ?.map(operation => {
+            const {
+              content_base64,
+              old_text_base64,
+              new_text_base64,
+              ...plainOperation
+            } = operation || {};
+            const normalized = { ...plainOperation };
+            if (content_base64 !== undefined) {
+              normalized.content = decodeBase64Text(content_base64, "content_base64");
+            }
+            if (old_text_base64 !== undefined) {
+              normalized.old_text = decodeBase64Text(old_text_base64, "old_text_base64");
+            }
+            if (new_text_base64 !== undefined) {
+              normalized.new_text = decodeBase64Text(new_text_base64, "new_text_base64");
+            }
+            return normalized;
+          })
+    }))
+  };
+}
+
 function parseJsonContent(text) {
   const raw = stripJsonFence(text);
   try { return JSON.parse(raw); } catch {}
@@ -147,6 +196,7 @@ Rules:
 - Produce a complete, testable patch.
 - Reply as plain text containing exactly one JSON object. Do not use a markdown code fence, attachment, bullet list, or explanatory sentence before or after it.
 - The plain-text response must be strict RFC 8259 JSON that can be parsed by JSON.parse.
+- For code and text payloads, use UTF-8 standard base64 fields: create_file uses content_base64; exact_replace uses old_text_base64 and new_text_base64. Do not put raw source code in those fields. The local worker decodes these fields before applying the patch.
 - Escape every double quote inside a JSON string as \\"; never place raw unescaped quotes inside summary, rationale, paths, or file contents.
 - Validate the complete plain-text response as one JSON object before sending. If no change is needed, return operations as an empty array.
 - Do not include markdown fences or commentary outside the JSON.
@@ -162,7 +212,7 @@ ${context}`;
       latencyMs: 0,
       attempts: 1,
       provider: "chatgpt-browser",
-      plan: parseJsonContent(response.response)
+    plan: normalizeEncodedPlan(parseJsonContent(response.response))
     };
   } catch (firstError) {
     appendSynthFailoverTrace("browser_json_repair_start", {
@@ -173,7 +223,7 @@ ${context}`;
 Return only one syntactically valid JSON object with this exact shape:
 {"candidates":[{"id":"candidate-1","summary":"...","rationale":"...","operations":[{"type":"create_file","path":"relative/path","content":"complete file"},{"type":"exact_replace","path":"relative/path","old_text":"exact text","new_text":"replacement"}]}]}
 
-Repair the previous worker output below. Preserve its intended candidate, paths, operations, and file contents. Escape all embedded double quotes correctly. Do not add commentary, markdown fences, or new work. If the previous output intended no change, preserve operations as an empty array.
+Repair the previous worker output below. Preserve its intended candidate, paths, operations, and file contents. Return code/text payloads as UTF-8 standard base64 fields: create_file uses content_base64; exact_replace uses old_text_base64 and new_text_base64. Do not add commentary, markdown fences, or new work. If the previous output intended no change, preserve operations as an empty array.
 
 BEGIN PREVIOUS OUTPUT
 ${response.response}
@@ -184,7 +234,7 @@ END PREVIOUS OUTPUT`;
         latencyMs: 0,
         attempts: 2,
         provider: "chatgpt-browser",
-        plan: parseJsonContent(repaired.response)
+        plan: normalizeEncodedPlan(parseJsonContent(repaired.response))
       };
     } catch (repairError) {
       appendSynthFailoverTrace("browser_json_repair_failed", {
