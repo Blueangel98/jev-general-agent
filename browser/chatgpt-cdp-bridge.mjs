@@ -31,7 +31,11 @@ function httpJson(url, method = "GET") {
 }
 
 async function createChatGptPage() {
-  return httpJson(`${cdpUrl}/json/new?https://chatgpt.com/`, "PUT");
+  // Open a real temporary conversation at the browser level. Opening the
+  // bare ChatGPT root can restore the last conversation into the new tab,
+  // which makes the send-state checks ambiguous and can leave an old answer
+  // attached to the new task.
+  return httpJson(`${cdpUrl}/json/new?https://chatgpt.com/?temporary-chat=true`, "PUT");
 }
 
 async function closePreviousChatGptPages(exceptId = "") {
@@ -410,6 +414,7 @@ async function send(prompt) {
           const form = composer?.closest("form");
           const button = form?.querySelector('button[type="submit"]') || document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="Gönder"], button[aria-label*="Prompt gönder"]');
           if (!button || button.disabled) return false;
+          button.scrollIntoView({ block: "center", inline: "center" });
           button.focus();
           button.click();
           return true;
@@ -449,6 +454,34 @@ async function send(prompt) {
               afterMouseClick.generating ||
               afterMouseClick.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
           }
+        }
+        if (!clicked) {
+          // React/ProseMirror builds can ignore a native click while focus is
+          // still inside the editor. Dispatch the complete keyboard event
+          // sequence on the live composer before falling back to CDP Enter.
+          await client.evaluate(`(() => {
+            const composer = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
+              .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
+            if (!composer) return false;
+            composer.focus();
+            for (const type of ["keydown", "keypress", "keyup"]) {
+              composer.dispatchEvent(new KeyboardEvent(type, {
+                key: "Enter",
+                code: "Enter",
+                keyCode: 13,
+                which: 13,
+                bubbles: true,
+                cancelable: true,
+                composed: true
+              }));
+            }
+            return true;
+          })()`);
+          await sleep(1000);
+          const afterKeyboard = await client.evaluate(PAGE_CONTROL_STATE);
+          clicked = afterKeyboard.assistantCount > before.assistantCount ||
+            afterKeyboard.generating ||
+            afterKeyboard.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
         }
         if (!clicked) {
           // Some ChatGPT builds expose the button but do not route a synthetic

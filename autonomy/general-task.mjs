@@ -289,8 +289,14 @@ const result =
     }
   );
 
+const childExitCode =
+  typeof result.status === "number"
+    ? result.status
+    : 1;
+
 if (
-  result.status === 1
+  childExitCode === 1 ||
+  result.error
 ) {
   console.log(
     "[GENERAL_TASK] child_exit_unhandled=1"
@@ -311,8 +317,7 @@ if (
         reason:
           "Autonomy child process exited before producing a verified apply result. No live apply is considered successful.",
 
-        childExitCode:
-          1
+        childExitCode
       },
       null,
       2
@@ -321,7 +326,7 @@ if (
 }
 
 process.exit(
-  typeof result.status === "number"
-    ? result.status
-    : 1
+  childExitCode === 1
+    ? 4
+    : childExitCode
 );
