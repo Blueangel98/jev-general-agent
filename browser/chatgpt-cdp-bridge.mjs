@@ -155,6 +155,42 @@ const PAGE_STATE = `(() => {
   };
 })()`;
 
+// Do not read assistant text while ChatGPT is still generating.  This state
+// intentionally contains only DOM/control metadata; the response body is
+// fetched with PAGE_STATE only after an explicit generation -> idle transition.
+const PAGE_CONTROL_STATE = `(() => {
+  const body = document.body?.innerText || "";
+  const composers = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
+    .filter(element => element.offsetParent !== null && !element.disabled);
+  const composer = composers.at(-1);
+  const assistants = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+  const buttons = [...document.querySelectorAll('button')]
+    .filter(button => button.offsetParent !== null)
+    .map(button => ({
+      disabled: button.disabled,
+      label: button.getAttribute("aria-label") || "",
+      testid: button.getAttribute("data-testid") || "",
+      text: (button.innerText || "").slice(0, 80)
+    }));
+  const stopButton = buttons.some(button =>
+    /stop generating|stop response|yanıtı durdur|oluşturmayı durdur|durdur/i.test(
+      button.label + " " + button.testid + " " + button.text
+    )
+  );
+  const streamingMarker = Boolean(document.querySelector(
+    '[aria-busy="true"], [data-is-streaming="true"], [data-streaming="true"], [data-state="streaming"], [class*="result-streaming"], [class*="streaming"]'
+  ));
+  const composerBusy = composer?.getAttribute("aria-busy") === "true";
+  const loginText = /log in|sign up|giri[sş]|kay[ıi]t ol/i.test(body) && !composer;
+  return {
+    loggedIn: Boolean(composer) && !loginText,
+    composer: Boolean(composer),
+    assistantCount: assistants.length,
+    generating: stopButton || streamingMarker || composerBusy,
+    generationEvidence: { stopButton, streamingMarker, composerBusy }
+  };
+})()`;
+
 async function status() {
   return withPage(async client => client.evaluate(PAGE_STATE));
 }
@@ -212,19 +248,32 @@ async function send(prompt) {
     }
 
     const deadline = Date.now() + Number(process.env.JEV_BROWSER_RESPONSE_TIMEOUT_MS || 180000);
-    let stable = 0;
-    let candidate = "";
+    let sawAssistant = false;
+    let sawGenerating = false;
+    let idlePolls = 0;
     while (Date.now() < deadline) {
       await sleep(1000);
-      const current = await client.evaluate(PAGE_STATE);
-      const responseChanged = current.assistantCount > before.assistantCount || current.lastAssistant !== before.lastAssistant;
-      if (current.lastAssistant && responseChanged) {
-        if (current.lastAssistant === candidate) stable += 1;
-        else { candidate = current.lastAssistant; stable = 1; }
-        if (stable >= 2) return { before, after: current, temporaryChat: temporaryToggle, response: current.lastAssistant };
+      const control = await client.evaluate(PAGE_CONTROL_STATE);
+      if (control.assistantCount > before.assistantCount) sawAssistant = true;
+      if (control.generating) {
+        sawGenerating = true;
+        idlePolls = 0;
+        continue;
+      }
+      if (sawAssistant && sawGenerating) {
+        idlePolls += 1;
+        // Require two idle polls after observing a real generation state.
+        // Only now is assistant text read, so partial streaming content cannot
+        // be mistaken for a completed patch plan.
+        if (idlePolls >= 2) {
+          const current = await client.evaluate(PAGE_STATE);
+          if (current.assistantCount > before.assistantCount && current.lastAssistant) {
+            return { before, after: current, temporaryChat: temporaryToggle, response: current.lastAssistant };
+          }
+        }
       }
     }
-    throw new Error("ChatGPT response timed out before a stable assistant response was available");
+    throw new Error("ChatGPT response timed out before a verified generation-complete state was available");
   }, { fresh: true });
 }
 
