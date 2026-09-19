@@ -392,7 +392,7 @@ async function send(prompt, { fresh = true } = {}) {
   let promptFilePath = null;
   try {
     bridgeLog(`send_start prompt_chars=${prompt.length}`);
-    return await withPage(async client => {
+    return await withPage(async (client, target) => {
     bridgeLog("page_ready");
     await client.call("Page.bringToFront");
     const before = await waitForChatGptReady(client);
@@ -404,11 +404,21 @@ async function send(prompt, { fresh = true } = {}) {
       const button = [...document.querySelectorAll('button')]
         .find(candidate => /geçici sohbet|temporary chat/i.test(candidate.getAttribute("aria-label") || candidate.innerText || ""));
       if (!button) return { found: false };
-      const active = button.getAttribute("aria-pressed") === "true" || /active|selected|pressed/i.test(button.className || "");
+      const label = (button.getAttribute("aria-label") || "") + " " + (button.innerText || "");
+      const active = /geçici sohbeti kapat|turn off temporary|disable temporary/i.test(label) ||
+        button.getAttribute("aria-pressed") === "true" ||
+        /active|selected|pressed/i.test(button.className || "");
       if (!active) button.click();
-      return { found: true, clicked: !active, activeBefore: active };
+      return { found: true, clicked: !active, activeBefore: active, label };
     })()`);
-    if (!temporaryToggle.found) throw new Error("ChatGPT temporary-chat control was not found");
+    const pageUrl = await client.evaluate("location.href");
+    const createdAsTemporary = /temporary-chat(?:=|%3d|\/)/i.test(`${target?.url || ""} ${pageUrl}`);
+    if (!temporaryToggle.found && !createdAsTemporary) {
+      throw new Error("ChatGPT temporary-chat control was not found and the fresh page was not marked temporary");
+    }
+    if (!temporaryToggle.found) {
+      bridgeLog("temporary_chat=confirmed_by_fresh_url");
+    }
     await sleep(400);
 
     // Prefer the fastest available ChatGPT reasoning mode for code synthesis.
