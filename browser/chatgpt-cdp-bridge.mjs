@@ -272,6 +272,57 @@ async function attachPromptFile(client, content) {
   return filePath;
 }
 
+async function preferFastGeneration(client) {
+  if (process.env.JEV_BROWSER_FAST_MODE === "0") {
+    return { enabled: false, reason: "disabled_by_environment" };
+  }
+
+  const trigger = await client.evaluate(`(() => {
+    const visible = element => element.offsetParent !== null && !element.disabled;
+    const textOf = element => [
+      element.getAttribute("aria-label") || "",
+      element.innerText || "",
+      element.textContent || ""
+    ].join(" ").trim();
+    const button = [...document.querySelectorAll("button")]
+      .filter(visible)
+      .find(element => /^(yüksek|high|thinking|reasoning|akıl yürütme)$/i.test(textOf(element)));
+    if (!button) return { found: false };
+    button.click();
+    return { found: true, label: textOf(button) };
+  })()`);
+
+  if (!trigger.found) {
+    return { enabled: true, changed: false, reason: "speed_menu_not_found" };
+  }
+
+  await sleep(250);
+  const choice = await client.evaluate(`(() => {
+    const visible = element => element.offsetParent !== null && !element.disabled;
+    const textOf = element => [
+      element.getAttribute("aria-label") || "",
+      element.innerText || "",
+      element.textContent || ""
+    ].join(" ").trim();
+    const options = [...document.querySelectorAll('button, [role="menuitem"], [role="option"]')]
+      .filter(visible);
+    const fast = options.find(element => /instant|hızlı|fast|düşük|low/i.test(textOf(element)));
+    if (!fast) return { found: false };
+    const label = textOf(fast);
+    fast.click();
+    return { found: true, label };
+  })()`);
+
+  await sleep(250);
+  return {
+    enabled: true,
+    changed: choice.found === true,
+    trigger: trigger.label,
+    selected: choice.label || null,
+    reason: choice.found ? "fast_option_selected" : "fast_option_not_found"
+  };
+}
+
 async function send(prompt) {
   if (process.env.JEV_BROWSER_ALLOW_TRANSMIT !== "1") {
     throw new Error("Browser transmission is disabled; set JEV_BROWSER_ALLOW_TRANSMIT=1 after user approval");
@@ -302,6 +353,11 @@ async function send(prompt) {
     })()`);
     if (!temporaryToggle.found) throw new Error("ChatGPT temporary-chat control was not found");
     await sleep(400);
+
+    // Prefer the fastest available ChatGPT reasoning mode for code synthesis.
+    // This is best-effort because ChatGPT can change labels or hide the
+    // selector for accounts/models that do not expose a speed control.
+    const speedMode = await preferFastGeneration(client);
 
     // Chrome/ChatGPT can restore an unsent draft into a newly created tab.
     // A fresh page is not necessarily an empty composer, so clear it before
@@ -552,7 +608,7 @@ async function send(prompt) {
         if (idlePolls >= 2) {
           const current = await client.evaluate(PAGE_STATE);
           if (current.assistantCount > before.assistantCount && current.lastAssistant) {
-            return { before, after: current, temporaryChat: temporaryToggle, response: current.lastAssistant };
+            return { before, after: current, temporaryChat: temporaryToggle, speedMode, response: current.lastAssistant };
           }
         }
       }
