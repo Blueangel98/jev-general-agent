@@ -1,0 +1,20 @@
+{
+  "name": "JEV General Agent Core Invariants",
+  "version": 1,
+  "requiredTools": [
+    "read_files",
+    "search_codebase",
+    "editor",
+    "run_commands"
+  ],
+  "requiredMarkers": [
+    "JEV_URL",
+    "/v1/systemone",
+    "Qwen: DISABLED",
+    "Ollama: DISABLED"
+  ],
+  "protectedFiles": [
+    "supervisor.mjs",
+    "runtime/stable-agent.mjs"
+  ]
+}

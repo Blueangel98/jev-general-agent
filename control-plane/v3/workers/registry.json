@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "workers": [
+    {"id":"scout","kind":"builtin-process","entry":"control-plane/v3/worker-runtime.mjs","purpose":"workspace and evidence inspection","tools":["read_directory","read_metadata"]},
+    {"id":"builder","kind":"builtin","purpose":"execute the requested development task"},
+    {"id":"validator","kind":"builtin-process","entry":"control-plane/v3/worker-runtime.mjs","purpose":"independent terminal-result validation","tools":["read_evidence"]},
+    {"id":"repairer","kind":"builtin","purpose":"diagnose and repair the agent/control-plane itself"},
+    {"id":"reporter","kind":"builtin","purpose":"produce the terminal result"}
+  ]
+}

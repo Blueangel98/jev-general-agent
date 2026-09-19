@@ -1,0 +1,41 @@
+# Local/runtime data
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+logs/
+control-plane/logs/
+snapshots/
+proposals/
+memory/task-experiences.jsonl
+runtime/*.pid
+proxy/*.pid
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*credentials*
+
+# Recovery copies and editor noise
+*.bak
+*.tmp
+.DS_Store
+.idea/
+.vscode/
+
+# Legacy workspace probes, not part of the generic agent package
+app/
+test_*.py
+test*.py
+proxy/request-trace.jsonl
+control-plane/v3/state/
+control-plane/state/
+control-plane/v3/memory/*.jsonl
+memory/*.jsonl
+config/workspace.json
+self-improvement/state.json

@@ -1,0 +1,12 @@
+{
+  "enabled": false,
+  "mode": "typesafe-only",
+  "localFallback": false,
+  "provider": "openai-compatible",
+  "timeoutMs": 120000,
+  "maxCandidates": 3,
+  "allowedOperations": [
+    "create_file",
+    "exact_replace"
+  ]
+}

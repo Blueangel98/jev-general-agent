@@ -1,0 +1,23 @@
+{
+  "name": "JEV General Development Agent",
+  "version": "0.1.0",
+  "provider": {
+    "name": "typesafe",
+    "baseUrl": "https://api.typesafe.ai/v1/systemone",
+    "model": "jev-latest",
+    "externalFallbacks": false
+  },
+  "port": 4012,
+  "autoRestart": true,
+  "selfImprovement": true,
+  "learning": {
+    "experienceMemory": true,
+    "retrievalLimit": 5,
+    "modelWeightTraining": false,
+    "codePromotion": "candidate-evaluate-rollback"
+  },
+  "candidatePort": 4013,
+  "stableRuntime": "runtime/stable-agent.mjs",
+  "activeRuntime": "runtime/active-agent.mjs",
+  "candidateRuntime": "runtime/candidate-agent.mjs"
+}

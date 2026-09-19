@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "name": "NameErrorProvider",
+      "status": "active",
+      "source": "runtime-v4"
+    },
+    {
+      "name": "ImportErrorProvider",
+      "status": "planned"
+    },
+    {
+      "name": "AttributeErrorProvider",
+      "status": "planned"
+    },
+    {
+      "name": "SyntaxErrorProvider",
+      "status": "planned"
+    },
+    {
+      "name": "DependencyProvider",
+      "status": "planned"
+    },
+    {
+      "name": "ConfigProvider",
+      "status": "planned"
+    }
+  ]
+}
