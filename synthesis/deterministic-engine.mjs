@@ -44,7 +44,21 @@ function functionReturnCandidate(task, context) {
   if (!file || !name || !expected) return null;
 
   const source = sourceFiles(context).find(item => item.path === file || item.path.endsWith(`/${file}`));
-  if (!source) return null;
+  if (!source) {
+    const fenced = String(task).match(/```(?:python|py|javascript|js|mjs)?\s*\r?\n([\s\S]*?)\r?\n```/i)?.[1];
+    if (!fenced) return null;
+    const isPython = /\.py$/i.test(file);
+    const returnPattern = isPython ? /^[ \t]*return\s+[^\r\n]+/m : /^[ \t]*return\s+[^\r\n]+/m;
+    const returnLine = fenced.match(returnPattern)?.[0];
+    if (!returnLine) return null;
+    const replaced = fenced.replace(returnPattern, returnLine.replace(/return\s+[^\r\n]+$/, `return ${stringLiteral(expected, isPython ? "python" : "javascript")}${isPython ? "" : ";"}`));
+    return {
+      id: "deterministic-fenced-file",
+      summary: `Create ${file} from the user-provided scaffold with the requested function behavior.`,
+      rationale: "The complete starting file was supplied by the user in a fenced code block; only the named return expression was changed.",
+      operations: [{ type: "create_file", path: file, content: replaced.endsWith("\n") ? replaced : `${replaced}\n` }]
+    };
+  }
 
   const isPython = /\.py$/i.test(source.path);
   let oldText = "";

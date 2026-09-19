@@ -1006,7 +1006,7 @@ export function runValidation(
     acceptanceCommands
       .map(
         command => {
-          const allowEmpty = /(?:python\s+-m\s+compileall\b|node\s+--check\b|tsc\s+--noEmit\b)/i.test(command);
+          const allowEmpty = /(?:python\s+-m\s+(?:compileall|py_compile)\b|node\s+--check\b|tsc\s+--noEmit\b)/i.test(command);
           return runCommand(
             root,
             command,

@@ -150,10 +150,23 @@ function isHandledBySandboxProjectTest(command) {
   return /^(?:npm test|python -m pytest -q(?:\s+-p\s+no:cacheprovider)?|gradlew\.bat test|\.\/gradlew test)$/i.test(String(command || "").trim());
 }
 
+function scaffoldAcceptance(task) {
+  if (!/```[\s\S]*```/m.test(String(task || ""))) return null;
+  const file = String(task || "").match(/\b([A-Za-z0-9_.\/-]+\.(?:py|js|mjs|cjs))\b/i)?.[1];
+  if (!file) return null;
+  if (/\.py$/i.test(file)) return `python -m py_compile "${file}"`;
+  return `node --check "${file}"`;
+}
+
 if (args.acceptance.length === 0 && discovered.verificationCommands.length > 0) {
   args.acceptance.push(
     ...discovered.verificationCommands.filter(command => !isHandledBySandboxProjectTest(command))
   );
+}
+
+if (args.acceptance.length === 0) {
+  const scaffoldCommand = scaffoldAcceptance(args.task);
+  if (scaffoldCommand) args.acceptance.push(scaffoldCommand);
 }
 
 if (
