@@ -887,10 +887,6 @@ Schema:
   ]
 }
 
-export function browserSynthesisEnabled() {
-  return browserSynthesisConfigured();
-}
-
 Allowed operations:
 
 create_file:
@@ -1131,4 +1127,8 @@ Do not invent evidence.
       "Synthesis failed"
     )
   );
+}
+
+export function browserSynthesisEnabled() {
+  return browserSynthesisConfigured();
 }
