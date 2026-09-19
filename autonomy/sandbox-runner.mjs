@@ -1005,12 +1005,15 @@ export function runValidation(
   const acceptance =
     acceptanceCommands
       .map(
-        command =>
-          runCommand(
+        command => {
+          const allowEmpty = /(?:python\s+-m\s+compileall\b|node\s+--check\b|tsc\s+--noEmit\b)/i.test(command);
+          return runCommand(
             root,
             command,
-            timeoutMs
-          )
+            timeoutMs,
+            { allowEmpty }
+          );
+        }
       );
 
   const security =

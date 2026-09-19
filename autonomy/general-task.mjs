@@ -146,6 +146,16 @@ const priorExperience = experienceContext(args.task);
 
 let autoAcceptance = null;
 
+function isHandledBySandboxProjectTest(command) {
+  return /^(?:npm test|python -m pytest -q(?:\s+-p\s+no:cacheprovider)?|gradlew\.bat test|\.\/gradlew test)$/i.test(String(command || "").trim());
+}
+
+if (args.acceptance.length === 0 && discovered.verificationCommands.length > 0) {
+  args.acceptance.push(
+    ...discovered.verificationCommands.filter(command => !isHandledBySandboxProjectTest(command))
+  );
+}
+
 if (
   args.acceptance.length === 0 &&
   discovered.verificationCommands.length === 0 &&
@@ -240,8 +250,7 @@ if (
 
 console.log(
   `[GENERAL_TASK] verification=${[
-    ...discovered.verificationCommands,
-    ...args.acceptance
+    ...(args.acceptance.length > 0 ? args.acceptance : discovered.verificationCommands)
   ].join(" | ") || "syntax-only-explicit"}`
 );
 

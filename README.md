@@ -38,6 +38,8 @@ JEV reasoning is implemented as a fast structured fan-out: the controller asks f
 
 The code self-improvement path is bounded: candidate -> syntax/security/evaluation -> promote, reject, or rollback. Run `node self-improvement/manager.mjs test-cycle` to verify the rejection and rollback path. A trusted source change should be followed by `node self-improvement/manager.mjs rebaseline`.
 
+The supervisor runs isolated `scout`, `planner`, `builder`, `validator`, `reviewer`, and `reporter` roles as child processes. With external synthesis disabled, the planner can use the local deterministic synthesis engine for verified named-function return changes and JSON primitive updates; unsupported free-form code generation is rejected rather than invented.
+
 This does not train JEV into Codex/Astra or create new model weights. It provides an Astra-like development workflow around JEV: inspect the selected workspace, decompose the request, edit through an isolated candidate, execute explicit validation commands, preserve evidence, and apply only a passing result. JEV remains the configured structured-decision provider; it is not a general-purpose local text-generation model.
 
 ## GitHub publishing

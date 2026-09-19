@@ -506,6 +506,20 @@ if (!args.task.trim()) {
 
     writeState(taskId, "SCOUT", "PASS", { workspace: ws, worker: scout.parsed });
 
+    console.log("[WORKER_PLANNER] planning_with_local_synthesis=true");
+    writeState(taskId, "PLANNER", "RUNNING", { worker: "planner" });
+    const planner = await runWorker("planner", ws, args.task, { scout: scout.parsed });
+    if (planner.code !== 0 || planner.parsed?.ok !== true) {
+      throw new Error(`Planner worker failed: ${planner.stderr || planner.stdout || planner.error || "unknown error"}`);
+    }
+    writeState(taskId, "PLANNER", "PASS", { worker: planner.parsed });
+    console.log(`[WORKER_PLANNER] verification=${(planner.parsed.verificationCommands || []).join(" | ") || "none"} synthesis=${planner.parsed.synthesisProvider}`);
+
+    const plannedArgs = {
+      ...args,
+      acceptance: args.acceptance || planner.parsed.verificationCommands?.[0] || ""
+    };
+
     let repairDepth = 0;
     const maxRepairDepth = Number(process.env.JEV_SELF_HEAL_MAX_REPAIRS || 2);
     let completed = false;
@@ -514,7 +528,7 @@ if (!args.task.trim()) {
       console.log(`[WORKER_BUILDER] attempt=${attempt}/3`);
       writeState(taskId, "BUILDER", "RUNNING", { attempt, repairDepth });
 
-      const result = await runTask(args, taskId, attempt);
+      const result = await runTask(plannedArgs, taskId, attempt);
       const status = terminalStatus(result.combined, result.code);
 
       console.log(`[WORKER_VALIDATOR] terminal=${status} exit=${result.code}`);
@@ -528,8 +542,17 @@ if (!args.task.trim()) {
         console.log(`[WORKER_VALIDATOR] independent_check=false reason=${validator.parsed?.error || "terminal evidence rejected"}`);
       }
 
-      if (status === "APPLIED" && result.code === 0 && validator.parsed?.ok === true) {
-        writeState(taskId, "REPORTER", "APPLIED", { attempt, repairDepth, validator: validator.parsed });
+      const reviewer = await runWorker("reviewer", ws, args.task, {
+        status,
+        code: result.code,
+        changed: result.combined.match(/"changed"\s*:\s*\[([\s\S]*?)\]/i)?.[1]?.match(/"([^\"]+)"/g)?.map(value => value.slice(1, -1)) || [],
+        validatorOk: validator.parsed?.ok === true,
+        planner: planner.parsed
+      });
+      console.log(`[WORKER_REVIEWER] accepted=${reviewer.parsed?.ok === true} review=${reviewer.parsed?.review || reviewer.parsed?.error || "unknown"}`);
+
+      if (status === "APPLIED" && result.code === 0 && validator.parsed?.ok === true && reviewer.parsed?.ok === true) {
+        writeState(taskId, "REPORTER", "APPLIED", { attempt, repairDepth, planner: planner.parsed, validator: validator.parsed, reviewer: reviewer.parsed });
         console.log("[SUPERVISOR_V3] final=APPLIED");
         process.exitCode = 0;
         completed = true;

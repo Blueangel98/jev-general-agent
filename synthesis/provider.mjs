@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { deterministicPatchPlan } from "./deterministic-engine.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SYNTHESIS_POLICY_FILE = path.join(ROOT, "config", "synthesis.json");
@@ -365,6 +366,16 @@ export async function generatePatchPlan({
   if (
     !synthesisConfigured()
   ) {
+    const localPlan = deterministicPatchPlan({ task, context });
+    if (localPlan) {
+      return {
+        latencyMs: 0,
+        attempts: 1,
+        provider: "local-deterministic",
+        plan: localPlan
+      };
+    }
+
     throw new Error(
       "Synthesis provider is not configured"
     );

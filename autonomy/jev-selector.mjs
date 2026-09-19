@@ -1,6 +1,45 @@
+import { spawn } from "node:child_process";
+
 const JEV_URL = process.env.JEV_URL || "https://api.typesafe.ai/v1/systemone";
 const JEV_MODEL = process.env.JEV_MODEL || "jev-latest";
 const JEV_KEY = process.env.TYPESAFE_API_KEY || "";
+
+function fetchViaPowerShell(url, init) {
+  return new Promise((resolve, reject) => {
+    const script = [
+      "$payload = [Console]::In.ReadToEnd()",
+      "$key = [Environment]::GetEnvironmentVariable('TYPESAFE_API_KEY','Process')",
+      "$response = Invoke-RestMethod -Uri $env:JEV_TARGET_URL -Method Post -Headers @{ Authorization = ('Bearer ' + $key) } -ContentType 'application/json' -Body $payload -TimeoutSec 60",
+      "$response | ConvertTo-Json -Depth 100 -Compress"
+    ].join("; ");
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      env: { ...process.env, JEV_TARGET_URL: url },
+      windowsHide: true
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk.toString(); });
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code !== 0) {
+        reject(new Error(`PowerShell JEV transport failed: ${stderr.slice(0, 500)}`));
+        return;
+      }
+      resolve(new Response(stdout, { status: 200, headers: { "content-type": "application/json" } }));
+    });
+    child.stdin.end(String(init?.body || ""));
+  });
+}
+
+async function fetchJev(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (process.platform !== "win32") throw error;
+    return fetchViaPowerShell(url, init);
+  }
+}
 
 function clip(v, n = 16000) {
   const s = typeof v === "string" ? v : JSON.stringify(v, null, 2);
@@ -62,7 +101,7 @@ export async function selectCandidate({ task, candidates, reports }) {
   };
 
   const started = Date.now();
-  const response = await fetch(JEV_URL, {
+  const response = await fetchJev(JEV_URL, {
     method: "POST",
     headers: {
       "content-type": "application/json",

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { detectVerificationSupport } from "../../autonomy/context-builder.mjs";
 
 function decode(value) {
   return Buffer.from(value || "", "base64").toString("utf8");
@@ -51,6 +52,19 @@ try {
   if (input.role === "scout") {
     const files = inventory(workspace);
     emit({ role: "scout", ok: true, workspace, taskReceived: Boolean(input.task), files, fileCount: files.length });
+  } else if (input.role === "planner") {
+    const files = inventory(workspace);
+    const verificationCommands = detectVerificationSupport(workspace);
+    emit({
+      role: "planner",
+      ok: true,
+      workspace,
+      fileCount: files.length,
+      verificationCommands,
+      synthesisProvider: "local-deterministic",
+      supportedPatterns: ["named-function-return", "json-primitive-update"],
+      planReady: verificationCommands.length > 0 || files.length === 0
+    });
   } else if (input.role === "validator") {
     let evidence = {};
     try { evidence = JSON.parse(input.evidence || "{}"); } catch { throw new Error("validator evidence is not JSON"); }
@@ -58,6 +72,22 @@ try {
     const ok = status === "APPLIED" && Number(evidence.code) === 0 &&
       String(evidence.output || "").trim().length > 0;
     emit({ role: "validator", ok, statusObserved: status, exitCodeObserved: evidence.code, evidencePresent: String(evidence.output || "").trim().length > 0 }, ok ? 0 : 4);
+  } else if (input.role === "reviewer") {
+    let evidence = {};
+    try { evidence = JSON.parse(input.evidence || "{}"); } catch { throw new Error("reviewer evidence is not JSON"); }
+    const status = String(evidence.status || "").toUpperCase();
+    const changed = Array.isArray(evidence.changed) ? evidence.changed : [];
+    const validatorOk = evidence.validatorOk === true;
+    const ok = status === "APPLIED" && Number(evidence.code) === 0 && validatorOk && changed.length > 0;
+    emit({
+      role: "reviewer",
+      ok,
+      statusObserved: status,
+      exitCodeObserved: evidence.code,
+      changedFiles: changed,
+      validatorAccepted: validatorOk,
+      review: ok ? "verified_terminal_change" : "terminal_change_not_verified"
+    }, ok ? 0 : 4);
   } else {
     throw new Error(`unknown worker role: ${input.role}`);
   }
