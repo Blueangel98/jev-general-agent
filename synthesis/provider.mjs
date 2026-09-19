@@ -189,6 +189,15 @@ function compactSynthesisText(value, limit) {
   return `${text.slice(0, head)}\n\n...[context shortened for this step]...\n\n${text.slice(-tail)}`;
 }
 
+function extractRepairFeedback(context) {
+  const text = String(context || "");
+  const marker = "PREVIOUS CANDIDATES FAILED DETERMINISTIC SANDBOX VERIFICATION.";
+  const index = text.indexOf(marker);
+  return index >= 0
+    ? compactSynthesisText(text.slice(index), 10000)
+    : "none";
+}
+
 function deriveSynthesisSteps(task) {
   const text = String(task || "").trim();
   const milestonePattern = /(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*\*)?M(\d+)\s*[—–-]\s*([^\n*]+)(?:\*\*)?/gim;
@@ -243,7 +252,11 @@ function deriveSynthesisSteps(task) {
 function buildBrowserStepPrompt({ task, context, step, index, total, completed }) {
   const globalBrief = compactSynthesisText(task, 2400);
   const stepBrief = compactSynthesisText(step.body, 7600);
-  const workspaceEvidence = compactSynthesisText(context, 7800);
+  const repairFeedback = extractRepairFeedback(context);
+  const workspaceContext = repairFeedback === "none"
+    ? context
+    : String(context).slice(0, String(context).indexOf("PREVIOUS CANDIDATES FAILED DETERMINISTIC SANDBOX VERIFICATION."));
+  const workspaceEvidence = compactSynthesisText(workspaceContext, 7800);
   const completedBrief = completed.length
     ? completed.map(item => `${item.title}: ${item.paths.join(", ") || "no file changes"}`).join("\n")
     : "none";
@@ -252,6 +265,7 @@ function buildBrowserStepPrompt({ task, context, step, index, total, completed }
 
 This is step ${index + 1} of ${total}: ${step.title}
 Work like a careful Codex coding agent: inspect the evidence, make a coherent implementation change, preserve existing behavior, and return working code rather than an explanation. Handle only this step and its direct prerequisites. Do not implement later steps in this response.
+If validation feedback is present below, treat it as a blocking defect report. Resolve the named import, symbol, path, or test failure against the supplied workspace evidence before returning code. Do not repeat a candidate that produced the same error.
 
 Return plain text containing exactly one strict RFC 8259 JSON object:
 {"candidates":[{"id":"step-${index + 1}","summary":"...","rationale":"...","operations":[{"type":"create_file","path":"relative/path","content_base64":"..."},{"type":"exact_replace","path":"relative/path","old_text_base64":"...","new_text_base64":"..."}]}]}
@@ -275,6 +289,9 @@ ${stepBrief}
 
 WORKSPACE EVIDENCE FOR THIS STEP:
 ${workspaceEvidence}
+
+VALIDATION FEEDBACK FROM THE PREVIOUS CANDIDATE:
+${repairFeedback}
 
 COMPLETED STEP SUMMARY (do not redo these changes):
 ${completedBrief}`;
