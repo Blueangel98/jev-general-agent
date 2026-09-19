@@ -944,7 +944,7 @@ catch (
     );
 
   const retryableSynthesisFailure =
-    /Synthesis provider is not configured|AbortError|aborted|timeout|timed out|ResourceExhausted|HTTP\s*(?:429|500|502|503|504)|status[=: ]+(?:429|500|502|503|504)/i
+    /LOCAL_SYNTHESIS_UNSUPPORTED|Synthesis provider is not configured|AbortError|aborted|timeout|timed out|ResourceExhausted|HTTP\s*(?:429|500|502|503|504)|status[=: ]+(?:429|500|502|503|504)/i
       .test(
         errorText
       );
@@ -985,24 +985,31 @@ catch (
       null;
   }
 
+  const unsupportedLocalSynthesis =
+    /LOCAL_SYNTHESIS_UNSUPPORTED|Local deterministic synthesis does not support/i.test(errorText);
+
   history({
     task,
 
     result:
-      "synthesis_unavailable",
+      unsupportedLocalSynthesis
+        ? "synthesis_unsupported"
+        : "synthesis_unavailable",
 
     stage:
       "synthesis",
 
     retryable:
-      true,
+      !unsupportedLocalSynthesis,
 
     error:
       errorText
   });
   recordExperience({
     task,
-    outcome: "synthesis_unavailable",
+    outcome: unsupportedLocalSynthesis
+      ? "synthesis_unsupported"
+      : "synthesis_unavailable",
     failure: errorText
   });
 
@@ -1020,10 +1027,12 @@ catch (
           "synthesis",
 
         retryable:
-          true,
+          !unsupportedLocalSynthesis,
 
         reason:
-          "Synthesis provider is unavailable or timed out. No live apply was performed."
+          unsupportedLocalSynthesis
+            ? "This task requires free-form multi-file code generation, which the configured local deterministic JEV mode does not support. No live apply was performed."
+            : "Synthesis provider is unavailable or timed out. No live apply was performed."
       },
       null,
       2

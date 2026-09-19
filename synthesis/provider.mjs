@@ -376,9 +376,11 @@ export async function generatePatchPlan({
       };
     }
 
-    throw new Error(
-      "Synthesis provider is not configured"
+    const error = new Error(
+      "Local deterministic synthesis does not support this free-form code-generation task"
     );
+    error.code = "LOCAL_SYNTHESIS_UNSUPPORTED";
+    throw error;
   }
 
   const url =
