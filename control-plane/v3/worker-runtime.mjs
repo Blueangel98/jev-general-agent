@@ -46,6 +46,15 @@ function inventory(root) {
 const input = args(process.argv.slice(2));
 const workspace = path.resolve(input.workspace || "");
 
+function synthesisProvider() {
+  try {
+    const policy = JSON.parse(fs.readFileSync(path.resolve("config/synthesis.json"), "utf8"));
+    if (policy.enabled === true && policy.provider === "chatgpt-browser" && process.env.JEV_BROWSER_ALLOW_TRANSMIT === "1") return "chatgpt-browser";
+    if (policy.enabled === true && policy.provider) return policy.provider;
+  } catch {}
+  return "local-deterministic";
+}
+
 try {
   if (!input.role || !fs.existsSync(workspace)) throw new Error("worker requires an existing workspace");
 
@@ -61,8 +70,10 @@ try {
       workspace,
       fileCount: files.length,
       verificationCommands,
-      synthesisProvider: "local-deterministic",
-      supportedPatterns: ["named-function-return", "json-primitive-update"],
+      synthesisProvider: synthesisProvider(),
+      supportedPatterns: synthesisProvider() === "chatgpt-browser"
+        ? ["free-form-multi-file-code-generation", "named-function-return", "json-primitive-update"]
+        : ["named-function-return", "json-primitive-update"],
       planReady: verificationCommands.length > 0 || files.length === 0
     });
   } else if (input.role === "validator") {

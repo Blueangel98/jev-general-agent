@@ -8,9 +8,9 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function httpJson(url) {
+function httpJson(url, method = "GET") {
   return new Promise((resolve, reject) => {
-    const request = http.get(url, response => {
+    const request = http.request(url, { method }, response => {
       let body = "";
       response.setEncoding("utf8");
       response.on("data", chunk => { body += chunk; });
@@ -24,7 +24,12 @@ function httpJson(url) {
       });
     });
     request.on("error", reject);
+    request.end();
   });
+}
+
+async function createChatGptPage() {
+  return httpJson(`${cdpUrl}/json/new?https://chatgpt.com/`, "PUT");
 }
 
 class CdpClient {
@@ -58,7 +63,14 @@ class CdpClient {
   call(method, params = {}) {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP command timed out: ${method}`));
+      }, 15000);
+      this.pending.set(id, {
+        resolve: value => { clearTimeout(timer); resolve(value); },
+        reject: error => { clearTimeout(timer); reject(error); }
+      });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -91,8 +103,15 @@ async function targetPage() {
   return target;
 }
 
-async function withPage(callback) {
-  const target = await targetPage();
+async function withPage(callback, { fresh = false } = {}) {
+  let created = null;
+  if (fresh) {
+    created = await createChatGptPage();
+    await sleep(3000);
+  }
+  const target = created?.webSocketDebuggerUrl || created?.type === "page"
+    ? created
+    : await targetPage();
   const client = new CdpClient(target.webSocketDebuggerUrl);
   await client.connect();
   try { return await callback(client, target); }
@@ -146,6 +165,17 @@ async function send(prompt) {
       throw new Error("Open a fresh ChatGPT chat before starting a supervised code task");
     }
 
+    const temporaryToggle = await client.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')]
+        .find(candidate => /geçici sohbet|temporary chat/i.test(candidate.getAttribute("aria-label") || candidate.innerText || ""));
+      if (!button) return { found: false };
+      const active = button.getAttribute("aria-pressed") === "true" || /active|selected|pressed/i.test(button.className || "");
+      if (!active) button.click();
+      return { found: true, clicked: !active, activeBefore: active };
+    })()`);
+    if (!temporaryToggle.found) throw new Error("ChatGPT temporary-chat control was not found");
+    await sleep(400);
+
     const focused = await client.evaluate(`(() => {
       const element = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
         .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
@@ -179,11 +209,11 @@ async function send(prompt) {
       if (current.lastAssistant && responseChanged) {
         if (current.lastAssistant === candidate) stable += 1;
         else { candidate = current.lastAssistant; stable = 1; }
-        if (stable >= 2) return { before, after: current, response: current.lastAssistant };
+        if (stable >= 2) return { before, after: current, temporaryChat: temporaryToggle, response: current.lastAssistant };
       }
     }
     throw new Error("ChatGPT response timed out before a stable assistant response was available");
-  });
+  }, { fresh: true });
 }
 
 async function main() {

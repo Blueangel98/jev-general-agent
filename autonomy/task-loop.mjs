@@ -944,7 +944,7 @@ catch (
     );
 
   const retryableSynthesisFailure =
-    /LOCAL_SYNTHESIS_UNSUPPORTED|Synthesis provider is not configured|AbortError|aborted|timeout|timed out|ResourceExhausted|HTTP\s*(?:429|500|502|503|504)|status[=: ]+(?:429|500|502|503|504)/i
+    /LOCAL_SYNTHESIS_UNSUPPORTED|Synthesis provider is not configured|ChatGPT browser worker|ChatGPT is not ready|Open a fresh ChatGPT chat|AbortError|aborted|timeout|timed out|ResourceExhausted|HTTP\s*(?:429|500|502|503|504)|status[=: ]+(?:429|500|502|503|504)/i
       .test(
         errorText
       );
@@ -987,12 +987,16 @@ catch (
 
   const unsupportedLocalSynthesis =
     /LOCAL_SYNTHESIS_UNSUPPORTED|Local deterministic synthesis does not support/i.test(errorText);
+  const browserWorkerFailure =
+    /ChatGPT browser worker|ChatGPT is not ready|Open a fresh ChatGPT chat/i.test(errorText);
 
   history({
     task,
 
     result:
-      unsupportedLocalSynthesis
+      browserWorkerFailure
+        ? "browser_worker_failed"
+        : unsupportedLocalSynthesis
         ? "synthesis_unsupported"
         : "synthesis_unavailable",
 
@@ -1000,14 +1004,16 @@ catch (
       "synthesis",
 
     retryable:
-      !unsupportedLocalSynthesis,
+      !unsupportedLocalSynthesis && !browserWorkerFailure,
 
     error:
       errorText
   });
   recordExperience({
     task,
-    outcome: unsupportedLocalSynthesis
+    outcome: browserWorkerFailure
+      ? "browser_worker_failed"
+      : unsupportedLocalSynthesis
       ? "synthesis_unsupported"
       : "synthesis_unavailable",
     failure: errorText
@@ -1027,10 +1033,12 @@ catch (
           "synthesis",
 
         retryable:
-          !unsupportedLocalSynthesis,
+          !unsupportedLocalSynthesis && !browserWorkerFailure,
 
         reason:
-          unsupportedLocalSynthesis
+          browserWorkerFailure
+            ? `ChatGPT browser worker failed: ${errorText.slice(0, 500)}. No live apply was performed.`
+            : unsupportedLocalSynthesis
             ? "This task requires free-form multi-file code generation, which the configured local deterministic JEV mode does not support. No live apply was performed."
             : "Synthesis provider is unavailable or timed out. No live apply was performed."
       },
