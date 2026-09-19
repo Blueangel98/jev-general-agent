@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 
 const DEFAULT_CDP = "http://127.0.0.1:9222";
 const cdpUrl = String(process.env.JEV_BROWSER_CDP_URL || DEFAULT_CDP).replace(/\/$/, "");
@@ -40,6 +42,16 @@ async function closePreviousChatGptPages() {
   for (const page of pages) {
     try { await httpJson(`${cdpUrl}/json/close/${encodeURIComponent(page.id)}`); }
     catch { /* A page may already be closing; continue with the fresh tab. */ }
+  }
+  // Chrome may report a closing target for a short period.  Do not create or
+  // select the next task tab until the old ChatGPT page has actually gone.
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const remaining = (await httpJson(`${cdpUrl}/json/list`)).filter(item =>
+      item.type === "page" && /^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//i.test(item.url || "")
+    );
+    if (remaining.length === 0) return;
+    await sleep(250);
   }
 }
 
@@ -96,6 +108,18 @@ class CdpClient {
       throw new Error(result.exceptionDetails.text || "Browser evaluation failed");
     }
     return result?.result?.value;
+  }
+
+  async evaluateObject(expression) {
+    const result = await this.call("Runtime.evaluate", {
+      expression,
+      returnByValue: false,
+      awaitPromise: true
+    });
+    if (result?.exceptionDetails) {
+      throw new Error(result.exceptionDetails.text || "Browser evaluation failed");
+    }
+    return result?.result?.objectId || null;
   }
 
   close() {
@@ -185,6 +209,7 @@ const PAGE_CONTROL_STATE = `(() => {
   return {
     loggedIn: Boolean(composer) && !loginText,
     composer: Boolean(composer),
+    composerLength: composer ? String(composer.value || composer.innerText || composer.textContent || "").length : 0,
     assistantCount: assistants.length,
     generating: stopButton || streamingMarker || composerBusy,
     generationEvidence: { stopButton, streamingMarker, composerBusy }
@@ -195,11 +220,56 @@ async function status() {
   return withPage(async client => client.evaluate(PAGE_STATE));
 }
 
+async function attachPromptFile(client, content) {
+  const filePath = path.join(
+    os.tmpdir(),
+    `jev-chatgpt-task-${process.pid}-${Date.now()}.txt`
+  );
+  fs.writeFileSync(filePath, content, "utf8");
+
+  await client.call("DOM.enable");
+  await client.evaluate(`(() => {
+    const button = [...document.querySelectorAll('button')]
+      .find(candidate => /dosya ve daha fazlasını ekle|attach file|upload/i.test(
+        candidate.getAttribute("aria-label") || candidate.innerText || ""
+      ));
+    if (button) button.click();
+    return Boolean(button);
+  })()`);
+
+  const deadline = Date.now() + 10000;
+  let inputObjectId = null;
+  while (Date.now() < deadline && !inputObjectId) {
+    inputObjectId = await client.evaluateObject(
+      `document.querySelector('input[type="file"]')`
+    );
+    if (!inputObjectId) await sleep(250);
+  }
+  if (!inputObjectId) {
+    fs.rmSync(filePath, { force: true });
+    throw new Error("ChatGPT file-upload input was not found");
+  }
+
+  try {
+    await client.call("DOM.setFileInputFiles", {
+      objectId: inputObjectId,
+      files: [filePath]
+    });
+  } catch (error) {
+    fs.rmSync(filePath, { force: true });
+    throw new Error(`ChatGPT text-file attachment failed: ${error.message}`);
+  }
+  await sleep(1000);
+  return filePath;
+}
+
 async function send(prompt) {
   if (process.env.JEV_BROWSER_ALLOW_TRANSMIT !== "1") {
     throw new Error("Browser transmission is disabled; set JEV_BROWSER_ALLOW_TRANSMIT=1 after user approval");
   }
-  return withPage(async client => {
+  let promptFilePath = null;
+  try {
+    return await withPage(async client => {
     await client.call("Page.bringToFront");
     let before = await client.evaluate(PAGE_STATE);
     for (let attempt = 0; attempt < 20 && !before.composer; attempt++) {
@@ -224,6 +294,13 @@ async function send(prompt) {
     if (!temporaryToggle.found) throw new Error("ChatGPT temporary-chat control was not found");
     await sleep(400);
 
+    const usePromptFile = prompt.length >= Number(process.env.JEV_BROWSER_FILE_THRESHOLD || 12000);
+    let composerPrompt = prompt;
+    if (usePromptFile) {
+      promptFilePath = await attachPromptFile(client, prompt);
+      composerPrompt = "Read the attached UTF-8 task file completely before acting. Follow every instruction in it and return only the exact JSON patch plan shape requested there. Do not answer from a partial read.";
+    }
+
     const focused = await client.evaluate(`(() => {
       const element = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
         .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
@@ -232,19 +309,93 @@ async function send(prompt) {
       return true;
     })()`);
     if (!focused) throw new Error("ChatGPT composer was not found");
-    await client.call("Input.insertText", { text: prompt });
-    const clicked = await client.evaluate(`(() => {
+
+    // A single Input.insertText call can time out on a large code-generation
+    // prompt even though Chrome has already inserted part of the text.  Send
+    // bounded chunks and verify the composer after insertion before trying to
+    // submit; otherwise the code below is never reached and the visible tab
+    // is left with an unsent prompt.
+    const inputChunkSize = 2048;
+    for (let offset = 0; offset < composerPrompt.length; offset += inputChunkSize) {
+      await client.call("Input.insertText", {
+        text: composerPrompt.slice(offset, offset + inputChunkSize)
+      });
+      await sleep(40);
+    }
+    const entered = await client.evaluate(`(() => {
       const composer = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
         .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
-      const form = composer?.closest("form");
-      const button = form?.querySelector('button[type="submit"]') || document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="Gönder"]');
-      if (!button || button.disabled) return false;
-      button.click();
-      return true;
+      return {
+        found: Boolean(composer),
+        length: composer ? String(composer.value || composer.innerText || composer.textContent || "").length : 0
+      };
     })()`);
+    if (!entered.found || entered.length < Math.max(1, Math.floor(composerPrompt.length * 0.98))) {
+      throw new Error(`ChatGPT composer did not receive the complete prompt (expected ${composerPrompt.length}, got ${entered.length})`);
+    }
+
+    const sendDeadline = Date.now() + 15000;
+    let clicked = false;
+    while (Date.now() < sendDeadline && !clicked) {
+      const sendState = await client.evaluate(`(() => {
+        const composer = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
+          .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
+        const form = composer?.closest("form");
+        const button = form?.querySelector('button[type="submit"]') || document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="Gönder"], button[aria-label*="Prompt gönder"]');
+        return {
+          found: Boolean(button),
+          disabled: Boolean(button?.disabled),
+          composerLength: composer ? String(composer.value || composer.innerText || composer.textContent || "").length : 0
+        };
+      })()`);
+      if (sendState.found && !sendState.disabled && sendState.composerLength > 0) {
+        await client.evaluate(`(() => {
+          const composer = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
+            .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
+          const form = composer?.closest("form");
+          const button = form?.querySelector('button[type="submit"]') || document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="Gönder"], button[aria-label*="Prompt gönder"]');
+          if (!button || button.disabled) return false;
+          button.focus();
+          button.click();
+          return true;
+        })()`);
+        await sleep(1000);
+        const afterClick = await client.evaluate(PAGE_CONTROL_STATE);
+        clicked = afterClick.assistantCount > before.assistantCount ||
+          afterClick.generating ||
+          afterClick.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+        if (!clicked) {
+          // Some ChatGPT builds expose the button but do not route a synthetic
+          // click through the React form handler.  Request submission directly
+          // and verify it again instead of assuming the click worked.
+          await client.evaluate(`(() => {
+            const composer = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
+              .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
+            const form = composer?.closest("form");
+            const button = form?.querySelector('button[type="submit"]') || document.querySelector('button[data-testid="send-button"], button[aria-label*="Send"], button[aria-label*="Gönder"], button[aria-label*="Prompt gönder"]');
+            if (form && button && !button.disabled && typeof form.requestSubmit === "function") form.requestSubmit(button);
+            return Boolean(form && button);
+          })()`);
+          await sleep(1000);
+          const afterRequestSubmit = await client.evaluate(PAGE_CONTROL_STATE);
+          clicked = afterRequestSubmit.assistantCount > before.assistantCount ||
+            afterRequestSubmit.generating ||
+            afterRequestSubmit.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+          if (!clicked) break;
+        }
+      }
+      if (!clicked) await sleep(250);
+    }
     if (!clicked) {
+      // Enter is only a fallback after the button was given time to become
+      // enabled.  This avoids silently inserting a newline into the prompt.
       await client.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
       await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await sleep(1000);
+      const submitted = await client.evaluate(PAGE_CONTROL_STATE);
+      if (submitted.assistantCount <= before.assistantCount && !submitted.generating && submitted.composerLength >= Math.max(1, Math.floor(composerPrompt.length * 0.5))) {
+        throw new Error("ChatGPT prompt was entered but the send action was not confirmed");
+      }
     }
 
     const deadline = Date.now() + Number(process.env.JEV_BROWSER_RESPONSE_TIMEOUT_MS || 180000);
@@ -274,7 +425,10 @@ async function send(prompt) {
       }
     }
     throw new Error("ChatGPT response timed out before a verified generation-complete state was available");
-  }, { fresh: true });
+    }, { fresh: true });
+  } finally {
+    if (promptFilePath) fs.rmSync(promptFilePath, { force: true });
+  }
 }
 
 async function main() {
