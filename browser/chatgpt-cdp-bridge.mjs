@@ -10,6 +10,48 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function bridgeLog(message) {
+  process.stderr.write(`[CHATGPT_BRIDGE] ${message}\n`);
+}
+
+function randomInt(min, max) {
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+async function humanClick(client, rect, attempt) {
+  const jitterX = attempt > 1 ? randomInt(-3, 3) : 0;
+  const jitterY = attempt > 1 ? randomInt(-3, 3) : 0;
+  const x = rect.x + jitterX;
+  const y = rect.y + jitterY;
+
+  // A short, variable pause and a real pointer sequence make the action more
+  // reliable on pages that occasionally ignore an immediate synthetic click.
+  await sleep(randomInt(180, 420));
+  await client.call("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y
+  });
+  await sleep(randomInt(70, 180));
+  await client.call("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1
+  });
+  await sleep(randomInt(80, 180));
+  await client.call("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1
+  });
+}
+
 function httpJson(url, method = "GET") {
   return new Promise((resolve, reject) => {
     const request = http.request(url, { method }, response => {
@@ -329,7 +371,9 @@ async function send(prompt) {
   }
   let promptFilePath = null;
   try {
+    bridgeLog(`send_start prompt_chars=${prompt.length}`);
     return await withPage(async client => {
+    bridgeLog("page_ready");
     await client.call("Page.bringToFront");
     let before = await client.evaluate(PAGE_STATE);
     for (let attempt = 0; attempt < 20 && !before.composer; attempt++) {
@@ -358,6 +402,7 @@ async function send(prompt) {
     // This is best-effort because ChatGPT can change labels or hide the
     // selector for accounts/models that do not expose a speed control.
     const speedMode = await preferFastGeneration(client);
+    bridgeLog(`speed_mode=${speedMode.reason || "selected"}`);
 
     // Chrome/ChatGPT can restore an unsent draft into a newly created tab.
     // A fresh page is not necessarily an empty composer, so clear it before
@@ -401,6 +446,7 @@ async function send(prompt) {
     if (usePromptFile) {
       promptFilePath = await attachPromptFile(client, prompt);
       composerPrompt = "Read the attached UTF-8 task file completely before acting. Follow every instruction in it and return only the exact JSON patch plan shape requested there. Do not answer from a partial read.";
+      bridgeLog(`prompt_file_attached chars=${prompt.length}`);
     }
 
     const focused = await client.evaluate(`(() => {
@@ -435,22 +481,33 @@ async function send(prompt) {
     if (!entered.found || entered.length < Math.max(1, Math.floor(composerPrompt.length * 0.98))) {
       throw new Error(`ChatGPT composer did not receive the complete prompt (expected ${composerPrompt.length}, got ${entered.length})`);
     }
+    bridgeLog(`prompt_entered chars=${entered.length}`);
 
     // Temporary-chat activation and file attachment can change the URL before
     // submission. Establish the baseline only after the complete prompt is
     // present so a navigation caused by the actual send is unambiguous.
     const submissionBaseline = await client.evaluate(PAGE_CONTROL_STATE);
-    const sendDeadline = Date.now() + 15000;
+    const submissionConfirmed = state =>
+      state.assistantCount > submissionBaseline.assistantCount ||
+      state.url !== submissionBaseline.url ||
+      state.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+    bridgeLog(`submission_ready button_expected=true composer_chars=${submissionBaseline.composerLength}`);
+    const sendDeadline = Date.now() + 30000;
     let clicked = false;
     let submissionAttempts = 0;
     while (Date.now() < sendDeadline && !clicked) {
+      bridgeLog("submission_poll");
       const observedBeforeSubmit = await client.evaluate(PAGE_CONTROL_STATE);
-      if (observedBeforeSubmit.assistantCount > submissionBaseline.assistantCount ||
-        observedBeforeSubmit.url !== submissionBaseline.url ||
-        observedBeforeSubmit.generating ||
-        observedBeforeSubmit.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5))) {
+      bridgeLog(`submission_observed assistant=${observedBeforeSubmit.assistantCount} generating=${observedBeforeSubmit.generating} composer_chars=${observedBeforeSubmit.composerLength}`);
+      if (submissionConfirmed(observedBeforeSubmit)) {
         clicked = true;
         break;
+      }
+      // File attachment processing can set the same DOM streaming marker used
+      // by response generation. It is not evidence that the prompt was sent.
+      if (observedBeforeSubmit.generating) {
+        await sleep(500);
+        continue;
       }
       if (submissionAttempts >= 3) {
         await sleep(500);
@@ -468,9 +525,21 @@ async function send(prompt) {
           rect: button ? (() => { const r = button.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, width: r.width, height: r.height }; })() : null
         };
       })()`);
+      if (sendState.found) bridgeLog(`send_button found=true disabled=${sendState.disabled} composer_chars=${sendState.composerLength}`);
       if (sendState.found && !sendState.disabled && sendState.composerLength > 0) {
         submissionAttempts += 1;
-        await client.evaluate(`(() => {
+        // Prefer a real browser click. The current ChatGPT ProseMirror
+        // composer can ignore a DOM click when a task file is attached.
+        if (sendState.rect?.width > 0 && sendState.rect?.height > 0) {
+          bridgeLog(`physical_click attempt=${submissionAttempts}`);
+          await client.call("Page.bringToFront");
+          await humanClick(client, sendState.rect, submissionAttempts);
+          await sleep(1200);
+          const afterMouseClick = await client.evaluate(PAGE_CONTROL_STATE);
+          bridgeLog(`physical_click_result assistant=${afterMouseClick.assistantCount} generating=${afterMouseClick.generating} composer_chars=${afterMouseClick.composerLength}`);
+          clicked = submissionConfirmed(afterMouseClick);
+        }
+        if (!clicked) await client.evaluate(`(() => {
           const composer = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
             .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
           const form = composer?.closest("form");
@@ -483,40 +552,16 @@ async function send(prompt) {
         })()`);
         await sleep(1000);
         const afterClick = await client.evaluate(PAGE_CONTROL_STATE);
-        clicked = afterClick.assistantCount > submissionBaseline.assistantCount ||
-          afterClick.url !== submissionBaseline.url ||
-          afterClick.generating ||
-          afterClick.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+        clicked = submissionConfirmed(afterClick);
         if (!clicked) {
           // A DOM click can be ignored by React when a file attachment has
           // just completed. Use a real browser input event at the current
           // button center, then verify the same submission evidence.
           if (sendState.rect?.width > 0 && sendState.rect?.height > 0) {
-            await client.call("Input.dispatchMouseEvent", {
-              type: "mouseMoved",
-              x: sendState.rect.x,
-              y: sendState.rect.y
-            });
-            await client.call("Input.dispatchMouseEvent", {
-              type: "mousePressed",
-              x: sendState.rect.x,
-              y: sendState.rect.y,
-              button: "left",
-              clickCount: 1
-            });
-            await client.call("Input.dispatchMouseEvent", {
-              type: "mouseReleased",
-              x: sendState.rect.x,
-              y: sendState.rect.y,
-              button: "left",
-              clickCount: 1
-            });
+            await humanClick(client, sendState.rect, submissionAttempts + 1);
             await sleep(1000);
             const afterMouseClick = await client.evaluate(PAGE_CONTROL_STATE);
-            clicked = afterMouseClick.assistantCount > submissionBaseline.assistantCount ||
-              afterMouseClick.url !== submissionBaseline.url ||
-              afterMouseClick.generating ||
-              afterMouseClick.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+            clicked = submissionConfirmed(afterMouseClick);
           }
         }
         if (!clicked) {
@@ -543,10 +588,7 @@ async function send(prompt) {
           })()`);
           await sleep(1000);
           const afterKeyboard = await client.evaluate(PAGE_CONTROL_STATE);
-          clicked = afterKeyboard.assistantCount > submissionBaseline.assistantCount ||
-            afterKeyboard.url !== submissionBaseline.url ||
-            afterKeyboard.generating ||
-            afterKeyboard.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+          clicked = submissionConfirmed(afterKeyboard);
         }
         if (!clicked) {
           // Some ChatGPT builds expose the button but do not route a synthetic
@@ -562,10 +604,7 @@ async function send(prompt) {
           })()`);
           await sleep(1000);
           const afterRequestSubmit = await client.evaluate(PAGE_CONTROL_STATE);
-          clicked = afterRequestSubmit.assistantCount > submissionBaseline.assistantCount ||
-            afterRequestSubmit.url !== submissionBaseline.url ||
-            afterRequestSubmit.generating ||
-            afterRequestSubmit.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+          clicked = submissionConfirmed(afterRequestSubmit);
         }
       }
       if (!clicked) await sleep(250);
@@ -577,10 +616,7 @@ async function send(prompt) {
       await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
       await sleep(1000);
       const submitted = await client.evaluate(PAGE_CONTROL_STATE);
-      if (submitted.assistantCount <= submissionBaseline.assistantCount &&
-        submitted.url === submissionBaseline.url &&
-        !submitted.generating &&
-        submitted.composerLength >= Math.max(1, Math.floor(composerPrompt.length * 0.5))) {
+      if (!submissionConfirmed(submitted)) {
         throw new Error("ChatGPT prompt was entered but the send action was not confirmed");
       }
     }
