@@ -1581,6 +1581,12 @@ function mutationReportFromEvidence(evidence) {
           )
       : [];
 
+  const scoutSeen = /\[WORKER_SCOUT\]/i.test(text);
+  const plannerMatch = text.match(/\[WORKER_PLANNER\]\s+verification=([^\r\n]*)\s+synthesis=([^\r\n]*)/i);
+  const validatorMatch = text.match(/\[WORKER_VALIDATOR\]\s+terminal=([^\s]+)\s+exit=([^\s\r\n]+)/i);
+  const reviewerMatch = text.match(/\[WORKER_REVIEWER\]\s+accepted=(true|false)\s+review=([^\r\n]+)/i);
+  const supervisorFinal = text.match(/\[SUPERVISOR_V3\]\s+final=([^\s\r\n]+)/i);
+
   const lines = [
     `JEV autonomy sonucu: ${status}.`
   ];
@@ -1642,6 +1648,15 @@ function mutationReportFromEvidence(evidence) {
     lines.push(
       `Değişen dosyalar: ${changed.join(", ")}`
     );
+  }
+
+  if (scoutSeen || plannerMatch || validatorMatch || reviewerMatch || supervisorFinal) {
+    lines.push("Supervisor alt-agent kanıtı:");
+    lines.push(`- scout: ${scoutSeen ? "çalıştı" : "kanıt yok"}`);
+    if (plannerMatch) lines.push(`- planner: çalıştı; doğrulama=${plannerMatch[1] || "none"}; sentez=${plannerMatch[2] || "unknown"}`);
+    if (validatorMatch) lines.push(`- validator: terminal=${validatorMatch[1]}; exit=${validatorMatch[2]}`);
+    if (reviewerMatch) lines.push(`- reviewer: accepted=${reviewerMatch[1]}; ${reviewerMatch[2]}`);
+    if (supervisorFinal) lines.push(`- supervisor: final=${supervisorFinal[1]}`);
   }
 
   lines.push(

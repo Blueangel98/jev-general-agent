@@ -27,6 +27,8 @@ function taskFunction(task) {
 
 function expectedToken(task) {
   const text = String(task || "");
+  const constant = text.match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/);
+  if (constant) return constant[0];
   const marker = text.match(/\b(?:JEV|JS|PY|TS|OK|EXPECTED)[A-Z0-9_:-]{2,}\b/);
   if (marker) return marker[0];
   const quoted = text.match(/["'`]([^"'`\r\n]{1,120})["'`]/);
