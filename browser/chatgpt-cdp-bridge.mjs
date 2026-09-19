@@ -34,10 +34,10 @@ async function createChatGptPage() {
   return httpJson(`${cdpUrl}/json/new?https://chatgpt.com/`, "PUT");
 }
 
-async function closePreviousChatGptPages() {
+async function closePreviousChatGptPages(exceptId = "") {
   const targets = await httpJson(`${cdpUrl}/json/list`);
   const pages = targets.filter(item =>
-    item.type === "page" && /^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//i.test(item.url || "")
+    item.type === "page" && item.id !== exceptId && /^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//i.test(item.url || "")
   );
   for (const page of pages) {
     try { await httpJson(`${cdpUrl}/json/close/${encodeURIComponent(page.id)}`); }
@@ -48,7 +48,7 @@ async function closePreviousChatGptPages() {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const remaining = (await httpJson(`${cdpUrl}/json/list`)).filter(item =>
-      item.type === "page" && /^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//i.test(item.url || "")
+      item.type === "page" && item.id !== exceptId && /^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//i.test(item.url || "")
     );
     if (remaining.length === 0) return;
     await sleep(250);
@@ -141,9 +141,11 @@ async function targetPage() {
 async function withPage(callback, { fresh = false } = {}) {
   let created = null;
   if (fresh) {
-    await closePreviousChatGptPages();
+    // Create the replacement first.  Closing the only existing ChatGPT page
+    // first can terminate Chrome itself, making /json/new fail with ECONNREFUSED.
     created = await createChatGptPage();
     await sleep(3000);
+    await closePreviousChatGptPages(created.id || "");
   }
   const target = created?.webSocketDebuggerUrl || created?.type === "page"
     ? created
