@@ -944,7 +944,7 @@ catch (
     );
 
   const retryableSynthesisFailure =
-    /LOCAL_SYNTHESIS_UNSUPPORTED|Synthesis provider is not configured|ChatGPT browser worker|ChatGPT is not ready|Open a fresh ChatGPT chat|ChatGPT browser synthesis returned invalid JSON|Browser synthesis response did not contain|invalid JSON|SyntaxError|Unexpected token|Expected ',' or '}'|AbortError|aborted|timeout|timed out|ResourceExhausted|HTTP\s*(?:429|500|502|503|504)|status[=: ]+(?:429|500|502|503|504)/i
+    /LOCAL_SYNTHESIS_UNSUPPORTED|Synthesis provider is not configured|ChatGPT browser worker|ChatGPT is not ready|Open a fresh ChatGPT chat|ChatGPT prompt was entered but the send action was not confirmed|ChatGPT browser synthesis returned invalid JSON|Browser synthesis response did not contain|invalid JSON|SyntaxError|Unexpected token|Expected ',' or '}'|AbortError|aborted|timeout|timed out|ResourceExhausted|HTTP\s*(?:429|500|502|503|504)|status[=: ]+(?:429|500|502|503|504)/i
       .test(
         errorText
       );
@@ -988,7 +988,7 @@ catch (
   const unsupportedLocalSynthesis =
     /LOCAL_SYNTHESIS_UNSUPPORTED|Local deterministic synthesis does not support/i.test(errorText);
   const browserWorkerFailure =
-    /ChatGPT browser worker|ChatGPT is not ready|Open a fresh ChatGPT chat/i.test(errorText);
+    /ChatGPT browser worker|ChatGPT is not ready|Open a fresh ChatGPT chat|ChatGPT prompt was entered but the send action was not confirmed/i.test(errorText);
   const browserJsonFailure =
     /ChatGPT browser synthesis returned invalid JSON|Browser synthesis response did not contain|invalid JSON|SyntaxError|Unexpected token|Expected ',' or '}'/i.test(errorText);
 

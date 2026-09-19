@@ -261,7 +261,9 @@ async function attachPromptFile(client, content) {
     fs.rmSync(filePath, { force: true });
     throw new Error(`ChatGPT text-file attachment failed: ${error.message}`);
   }
-  await sleep(1000);
+  // ChatGPT may show the document card before its upload state has settled.
+  // Give the composer time to promote the attachment to a sendable item.
+  await sleep(2500);
   return filePath;
 }
 
@@ -384,7 +386,8 @@ async function send(prompt) {
         return {
           found: Boolean(button),
           disabled: Boolean(button?.disabled),
-          composerLength: composer ? String(composer.value || composer.innerText || composer.textContent || "").length : 0
+          composerLength: composer ? String(composer.value || composer.innerText || composer.textContent || "").length : 0,
+          rect: button ? (() => { const r = button.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, width: r.width, height: r.height }; })() : null
         };
       })()`);
       if (sendState.found && !sendState.disabled && sendState.composerLength > 0) {
@@ -403,6 +406,37 @@ async function send(prompt) {
         clicked = afterClick.assistantCount > before.assistantCount ||
           afterClick.generating ||
           afterClick.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+        if (!clicked) {
+          // A DOM click can be ignored by React when a file attachment has
+          // just completed. Use a real browser input event at the current
+          // button center, then verify the same submission evidence.
+          if (sendState.rect?.width > 0 && sendState.rect?.height > 0) {
+            await client.call("Input.dispatchMouseEvent", {
+              type: "mouseMoved",
+              x: sendState.rect.x,
+              y: sendState.rect.y
+            });
+            await client.call("Input.dispatchMouseEvent", {
+              type: "mousePressed",
+              x: sendState.rect.x,
+              y: sendState.rect.y,
+              button: "left",
+              clickCount: 1
+            });
+            await client.call("Input.dispatchMouseEvent", {
+              type: "mouseReleased",
+              x: sendState.rect.x,
+              y: sendState.rect.y,
+              button: "left",
+              clickCount: 1
+            });
+            await sleep(1000);
+            const afterMouseClick = await client.evaluate(PAGE_CONTROL_STATE);
+            clicked = afterMouseClick.assistantCount > before.assistantCount ||
+              afterMouseClick.generating ||
+              afterMouseClick.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
+          }
+        }
         if (!clicked) {
           // Some ChatGPT builds expose the button but do not route a synthetic
           // click through the React form handler.  Request submission directly
