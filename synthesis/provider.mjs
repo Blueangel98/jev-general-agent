@@ -181,38 +181,113 @@ function runBrowserBridge(prompt) {
   });
 }
 
-async function generateBrowserPatchPlan({ task, context }) {
-  const prompt = `You are the code-writing worker inside a supervised local coding agent.
+function compactSynthesisText(value, limit) {
+  const text = String(value || "").trim();
+  if (text.length <= limit) return text;
+  const head = Math.ceil(limit * 0.62);
+  const tail = Math.floor(limit * 0.28);
+  return `${text.slice(0, head)}\n\n...[context shortened for this step]...\n\n${text.slice(-tail)}`;
+}
 
-Return JSON only with this exact shape:
-{"candidates":[{"id":"candidate-1","summary":"...","rationale":"...","operations":[{"type":"create_file","path":"relative/path","content":"complete file"},{"type":"exact_replace","path":"relative/path","old_text":"exact text","new_text":"replacement"}]}]}
+function deriveSynthesisSteps(task) {
+  const text = String(task || "").trim();
+  const milestonePattern = /(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*\*)?M(\d+)\s*[—–-]\s*([^\n*]+)(?:\*\*)?/gim;
+  const milestones = [...text.matchAll(milestonePattern)];
+
+  if (milestones.length >= 2) {
+    const chunks = milestones.map((match, index) => {
+      const start = match.index;
+      const end = index + 1 < milestones.length
+        ? milestones[index + 1].index
+        : text.length;
+      return {
+        title: `M${match[1]} — ${match[2].trim()}`,
+        body: text.slice(start, end).trim()
+      };
+    });
+    const grouped = [];
+    for (let index = 0; index < chunks.length; index += 3) {
+      const group = chunks.slice(index, index + 3);
+      grouped.push({
+        title: group.map(step => step.title).join("; "),
+        body: group.map(step => step.body).join("\n\n")
+      });
+    }
+    return grouped;
+  }
+
+  const headings = [...text.matchAll(/(?:^|\n)\s{0,3}(#{2,4})\s+([^\n]+)\s*/g)]
+    .map((match, index, all) => ({
+      title: match[2].trim(),
+      body: text.slice(match.index, index + 1 < all.length ? all[index + 1].index : text.length).trim()
+    }));
+
+  if (headings.length >= 3) {
+    const grouped = [];
+    for (let index = 0; index < headings.length; index += 2) {
+      const group = headings.slice(index, index + 2);
+      grouped.push({
+        title: group.map(step => step.title).join("; "),
+        body: group.map(step => step.body).join("\n\n")
+      });
+    }
+    return grouped.slice(0, 5);
+  }
+
+  return [{
+    title: "Current implementation slice",
+    body: text
+  }];
+}
+
+function buildBrowserStepPrompt({ task, context, step, index, total, completed }) {
+  const globalBrief = compactSynthesisText(task, 2400);
+  const stepBrief = compactSynthesisText(step.body, 7600);
+  const workspaceEvidence = compactSynthesisText(context, 7800);
+  const completedBrief = completed.length
+    ? completed.map(item => `${item.title}: ${item.paths.join(", ") || "no file changes"}`).join("\n")
+    : "none";
+
+  return `You are the code-writing worker inside a supervised local coding agent.
+
+This is step ${index + 1} of ${total}: ${step.title}
+Work like a careful Codex coding agent: inspect the evidence, make a coherent implementation change, preserve existing behavior, and return working code rather than an explanation. Handle only this step and its direct prerequisites. Do not implement later steps in this response.
+
+Return plain text containing exactly one strict RFC 8259 JSON object:
+{"candidates":[{"id":"step-${index + 1}","summary":"...","rationale":"...","operations":[{"type":"create_file","path":"relative/path","content_base64":"..."},{"type":"exact_replace","path":"relative/path","old_text_base64":"...","new_text_base64":"..."}]}]}
 
 Rules:
 - Write the requested code; do not merely explain it.
 - Use only relative paths inside the selected workspace.
-- Existing files must use exact_replace; new files use create_file.
+- Existing files use exact_replace; new files use create_file.
 - Do not modify supervisor.mjs or runtime/stable-agent.mjs.
-- Preserve existing behavior unless the task requests a change.
-- Produce a complete, testable patch.
-- Reply as plain text containing exactly one JSON object. Do not use a markdown code fence, attachment, bullet list, or explanatory sentence before or after it.
-- The plain-text response must be strict RFC 8259 JSON that can be parsed by JSON.parse.
-- For code and text payloads, use UTF-8 standard base64 fields: create_file uses content_base64; exact_replace uses old_text_base64 and new_text_base64. Do not put raw source code in those fields. The local worker decodes these fields before applying the patch.
-- Escape every double quote inside a JSON string as \\"; never place raw unescaped quotes inside summary, rationale, paths, or file contents.
-- Validate the complete plain-text response as one JSON object before sending. If no change is needed, return operations as an empty array.
-- Do not include markdown fences or commentary outside the JSON.
+- Keep this step focused. Avoid unrelated refactors and do not repeat files already owned by an earlier step unless this step explicitly extends them.
+- Use UTF-8 standard base64 for every code/text payload. Never put raw source code in JSON string fields.
+- Return one candidate with a small, coherent patch. If this step genuinely needs no code change, return operations as an empty array.
+- No markdown fence, attachment, bullet list, or commentary outside the JSON.
+- Validate the complete response with JSON.parse before sending.
 
-TASK:
-${task}
+GLOBAL TASK BRIEF:
+${globalBrief}
 
-WORKSPACE EVIDENCE:
-${context}`;
+CURRENT STEP REQUIREMENTS:
+${stepBrief}
+
+WORKSPACE EVIDENCE FOR THIS STEP:
+${workspaceEvidence}
+
+COMPLETED STEP SUMMARY (do not redo these changes):
+${completedBrief}`;
+}
+
+async function generateOneBrowserPatchPlan(prompt) {
   const response = await runBrowserBridge(prompt);
   try {
     return {
-      latencyMs: 0,
+      latencyMs: Number(response.latencyMs || 0),
       attempts: 1,
       provider: "chatgpt-browser",
-    plan: normalizeEncodedPlan(parseJsonContent(response.response))
+      plan: normalizeEncodedPlan(parseJsonContent(response.response))
     };
   } catch (firstError) {
     appendSynthFailoverTrace("browser_json_repair_start", {
@@ -220,10 +295,10 @@ ${context}`;
     });
     const repairPrompt = `You are a strict JSON repair worker.
 
-Return only one syntactically valid JSON object with this exact shape:
-{"candidates":[{"id":"candidate-1","summary":"...","rationale":"...","operations":[{"type":"create_file","path":"relative/path","content":"complete file"},{"type":"exact_replace","path":"relative/path","old_text":"exact text","new_text":"replacement"}]}]}
+Return only one valid JSON object in this shape:
+{"candidates":[{"id":"step-repaired","summary":"...","rationale":"...","operations":[{"type":"create_file","path":"relative/path","content_base64":"..."},{"type":"exact_replace","path":"relative/path","old_text_base64":"...","new_text_base64":"..."}]}]}
 
-Repair the previous worker output below. Preserve its intended candidate, paths, operations, and file contents. Return code/text payloads as UTF-8 standard base64 fields: create_file uses content_base64; exact_replace uses old_text_base64 and new_text_base64. Do not add commentary, markdown fences, or new work. If the previous output intended no change, preserve operations as an empty array.
+Preserve the previous worker's intended code and operations. Repair syntax only; do not add new work. Keep code/text payloads as UTF-8 standard base64. Do not output markdown or commentary.
 
 BEGIN PREVIOUS OUTPUT
 ${response.response}
@@ -231,7 +306,7 @@ END PREVIOUS OUTPUT`;
     try {
       const repaired = await runBrowserBridge(repairPrompt);
       return {
-        latencyMs: 0,
+        latencyMs: Number(repaired.latencyMs || 0),
         attempts: 2,
         provider: "chatgpt-browser",
         plan: normalizeEncodedPlan(parseJsonContent(repaired.response))
@@ -245,6 +320,53 @@ END PREVIOUS OUTPUT`;
       );
     }
   }
+}
+
+async function generateBrowserPatchPlan({ task, context }) {
+  const steps = deriveSynthesisSteps(task);
+  const completed = [];
+  const plans = [];
+  let latencyMs = 0;
+  let attempts = 0;
+
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    console.error(`[SYNTHESIS] step=${index + 1}/${steps.length} title=${step.title}`);
+    const generated = await generateOneBrowserPatchPlan(buildBrowserStepPrompt({
+      task,
+      context,
+      step,
+      index,
+      total: steps.length,
+      completed
+    }));
+    const plan = generated.plan;
+    const candidate = Array.isArray(plan?.candidates) ? plan.candidates[0] : null;
+    if (!candidate) throw new Error(`Step ${index + 1} returned no candidate`);
+    plans.push(candidate);
+    latencyMs += generated.latencyMs;
+    attempts += generated.attempts;
+    completed.push({
+      title: step.title,
+      paths: Array.isArray(candidate.operations)
+        ? candidate.operations.map(operation => operation.path).filter(Boolean)
+        : []
+    });
+  }
+
+  return {
+    latencyMs,
+    attempts,
+    provider: "chatgpt-browser",
+    plan: {
+      candidates: [{
+        id: "stepwise-implementation",
+        summary: plans.map(candidate => candidate.summary).filter(Boolean).join("; ") || "Stepwise implementation",
+        rationale: plans.map(candidate => candidate.rationale).filter(Boolean).join("; "),
+        operations: plans.flatMap(candidate => Array.isArray(candidate.operations) ? candidate.operations : [])
+      }]
+    }
+  };
 }
 
 function sleep(ms) {
