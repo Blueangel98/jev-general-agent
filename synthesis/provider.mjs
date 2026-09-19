@@ -30,12 +30,74 @@ function stripJsonFence(text) {
     : raw;
 }
 
+function repairLikelyJson(raw) {
+  let output = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index];
+    if (!inString) {
+      output += character;
+      if (character === '"') inString = true;
+      continue;
+    }
+
+    if (escaped) {
+      output += character;
+      escaped = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      const next = raw[index + 1] || "";
+      if ('"\\/bfnrtu'.includes(next)) {
+        output += character;
+        escaped = true;
+      } else {
+        output += "\\\\";
+      }
+      continue;
+    }
+
+    if (character === '"') {
+      let nextIndex = index + 1;
+      while (/\s/.test(raw[nextIndex] || "")) nextIndex += 1;
+      const next = raw[nextIndex] || "";
+      if (nextIndex >= raw.length || [",", "}", "]", ":"].includes(next)) {
+        output += character;
+        inString = false;
+      } else {
+        // The quote is inside a malformed JSON string, e.g. summary text
+        // containing "PY_OK". Preserve it as data instead of closing the
+        // string prematurely.
+        output += "\\\"";
+      }
+      continue;
+    }
+
+    if (character === "\r" || character === "\n") {
+      if (character === "\r" && raw[index + 1] === "\n") index += 1;
+      output += "\\n";
+      continue;
+    }
+
+    output += character;
+  }
+  return output;
+}
+
 function parseJsonContent(text) {
   const raw = stripJsonFence(text);
   try { return JSON.parse(raw); } catch {}
+  try { return JSON.parse(repairLikelyJson(raw)); } catch {}
   const first = raw.indexOf("{");
   const last = raw.lastIndexOf("}");
-  if (first >= 0 && last > first) return JSON.parse(raw.slice(first, last + 1));
+  if (first >= 0 && last > first) {
+    const objectText = raw.slice(first, last + 1);
+    try { return JSON.parse(objectText); } catch {}
+    return JSON.parse(repairLikelyJson(objectText));
+  }
   throw new Error("Browser synthesis response did not contain a JSON patch plan");
 }
 
@@ -83,6 +145,9 @@ Rules:
 - Do not modify supervisor.mjs or runtime/stable-agent.mjs.
 - Preserve existing behavior unless the task requests a change.
 - Produce a complete, testable patch.
+- Output strict RFC 8259 JSON that can be parsed by JSON.parse.
+- Escape every double quote inside a JSON string as \\"; never place raw unescaped quotes inside summary, rationale, paths, or file contents.
+- Before sending, validate the complete response mentally as one JSON object. If no change is needed, return operations as an empty array.
 - Do not include markdown fences or commentary outside the JSON.
 
 TASK:
@@ -91,12 +156,44 @@ ${task}
 WORKSPACE EVIDENCE:
 ${context}`;
   const response = await runBrowserBridge(prompt);
-  return {
-    latencyMs: 0,
-    attempts: 1,
-    provider: "chatgpt-browser",
-    plan: parseJsonContent(response.response)
-  };
+  try {
+    return {
+      latencyMs: 0,
+      attempts: 1,
+      provider: "chatgpt-browser",
+      plan: parseJsonContent(response.response)
+    };
+  } catch (firstError) {
+    appendSynthFailoverTrace("browser_json_repair_start", {
+      error: String(firstError?.message || firstError)
+    });
+    const repairPrompt = `You are a strict JSON repair worker.
+
+Return only one syntactically valid JSON object with this exact shape:
+{"candidates":[{"id":"candidate-1","summary":"...","rationale":"...","operations":[{"type":"create_file","path":"relative/path","content":"complete file"},{"type":"exact_replace","path":"relative/path","old_text":"exact text","new_text":"replacement"}]}]}
+
+Repair the previous worker output below. Preserve its intended candidate, paths, operations, and file contents. Escape all embedded double quotes correctly. Do not add commentary, markdown fences, or new work. If the previous output intended no change, preserve operations as an empty array.
+
+BEGIN PREVIOUS OUTPUT
+${response.response}
+END PREVIOUS OUTPUT`;
+    try {
+      const repaired = await runBrowserBridge(repairPrompt);
+      return {
+        latencyMs: 0,
+        attempts: 2,
+        provider: "chatgpt-browser",
+        plan: parseJsonContent(repaired.response)
+      };
+    } catch (repairError) {
+      appendSynthFailoverTrace("browser_json_repair_failed", {
+        error: String(repairError?.message || repairError)
+      });
+      throw new Error(
+        `ChatGPT browser synthesis returned invalid JSON after repair: ${repairError.message}`
+      );
+    }
+  }
 }
 
 function sleep(ms) {
