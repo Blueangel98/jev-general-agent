@@ -10,7 +10,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$root = Split-Path -Parent $PSScriptRoot
 $runner = "$root\run-task.ps1"
 $workspaceFile = "$root\config\workspace.json"
 $stateDir = "$root\control-plane\state"
@@ -116,6 +116,7 @@ try {
 
     $params = @{
         Task = $Task
+        Workspace = $workspace
     }
 
     if (-not [string]::IsNullOrWhiteSpace($Acceptance)) {
