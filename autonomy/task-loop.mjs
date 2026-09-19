@@ -954,7 +954,22 @@ catch (
   if (
     !retryableSynthesisFailure
   ) {
-    throw error;
+    console.log(
+      "[AUTONOMY] terminal_status=NEEDS_VERIFICATION"
+    );
+    console.log(
+      JSON.stringify(
+        {
+          status: "NEEDS_VERIFICATION",
+          stage: "autonomy_child",
+          retryable: false,
+          reason: `Autonomy task loop failed: ${errorText.slice(0, 500)}. No live apply was performed.`
+        },
+        null,
+        2
+      )
+    );
+    process.exit(4);
   }
 
   let task =

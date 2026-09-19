@@ -213,6 +213,7 @@ const PAGE_CONTROL_STATE = `(() => {
   const composerBusy = composer?.getAttribute("aria-busy") === "true";
   const loginText = /log in|sign up|giri[sş]|kay[ıi]t ol/i.test(body) && !composer;
   return {
+    url: location.href,
     loggedIn: Boolean(composer) && !loginText,
     composer: Boolean(composer),
     composerLength: composer ? String(composer.value || composer.innerText || composer.textContent || "").length : 0,
@@ -379,12 +380,17 @@ async function send(prompt) {
       throw new Error(`ChatGPT composer did not receive the complete prompt (expected ${composerPrompt.length}, got ${entered.length})`);
     }
 
+    // Temporary-chat activation and file attachment can change the URL before
+    // submission. Establish the baseline only after the complete prompt is
+    // present so a navigation caused by the actual send is unambiguous.
+    const submissionBaseline = await client.evaluate(PAGE_CONTROL_STATE);
     const sendDeadline = Date.now() + 15000;
     let clicked = false;
     let submissionAttempts = 0;
     while (Date.now() < sendDeadline && !clicked) {
       const observedBeforeSubmit = await client.evaluate(PAGE_CONTROL_STATE);
-      if (observedBeforeSubmit.assistantCount > before.assistantCount ||
+      if (observedBeforeSubmit.assistantCount > submissionBaseline.assistantCount ||
+        observedBeforeSubmit.url !== submissionBaseline.url ||
         observedBeforeSubmit.generating ||
         observedBeforeSubmit.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5))) {
         clicked = true;
@@ -421,7 +427,8 @@ async function send(prompt) {
         })()`);
         await sleep(1000);
         const afterClick = await client.evaluate(PAGE_CONTROL_STATE);
-        clicked = afterClick.assistantCount > before.assistantCount ||
+        clicked = afterClick.assistantCount > submissionBaseline.assistantCount ||
+          afterClick.url !== submissionBaseline.url ||
           afterClick.generating ||
           afterClick.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
         if (!clicked) {
@@ -450,7 +457,8 @@ async function send(prompt) {
             });
             await sleep(1000);
             const afterMouseClick = await client.evaluate(PAGE_CONTROL_STATE);
-            clicked = afterMouseClick.assistantCount > before.assistantCount ||
+            clicked = afterMouseClick.assistantCount > submissionBaseline.assistantCount ||
+              afterMouseClick.url !== submissionBaseline.url ||
               afterMouseClick.generating ||
               afterMouseClick.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
           }
@@ -479,7 +487,8 @@ async function send(prompt) {
           })()`);
           await sleep(1000);
           const afterKeyboard = await client.evaluate(PAGE_CONTROL_STATE);
-          clicked = afterKeyboard.assistantCount > before.assistantCount ||
+          clicked = afterKeyboard.assistantCount > submissionBaseline.assistantCount ||
+            afterKeyboard.url !== submissionBaseline.url ||
             afterKeyboard.generating ||
             afterKeyboard.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
         }
@@ -497,7 +506,8 @@ async function send(prompt) {
           })()`);
           await sleep(1000);
           const afterRequestSubmit = await client.evaluate(PAGE_CONTROL_STATE);
-          clicked = afterRequestSubmit.assistantCount > before.assistantCount ||
+          clicked = afterRequestSubmit.assistantCount > submissionBaseline.assistantCount ||
+            afterRequestSubmit.url !== submissionBaseline.url ||
             afterRequestSubmit.generating ||
             afterRequestSubmit.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
         }
@@ -511,7 +521,10 @@ async function send(prompt) {
       await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
       await sleep(1000);
       const submitted = await client.evaluate(PAGE_CONTROL_STATE);
-      if (submitted.assistantCount <= before.assistantCount && !submitted.generating && submitted.composerLength >= Math.max(1, Math.floor(composerPrompt.length * 0.5))) {
+      if (submitted.assistantCount <= submissionBaseline.assistantCount &&
+        submitted.url === submissionBaseline.url &&
+        !submitted.generating &&
+        submitted.composerLength >= Math.max(1, Math.floor(composerPrompt.length * 0.5))) {
         throw new Error("ChatGPT prompt was entered but the send action was not confirmed");
       }
     }

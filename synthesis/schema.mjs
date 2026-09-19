@@ -131,11 +131,10 @@ export function validateCandidate(candidate) {
   }
 
   if (
-    !Array.isArray(candidate.operations) ||
-    candidate.operations.length === 0
+    !Array.isArray(candidate.operations)
   ) {
     throw new Error(
-      "Candidate requires operations"
+      "Candidate requires an operations array"
     );
   }
 

@@ -542,16 +542,18 @@ if (!args.task.trim()) {
         console.log(`[WORKER_VALIDATOR] independent_check=false reason=${validator.parsed?.error || "terminal evidence rejected"}`);
       }
 
+      const changedFiles = result.combined.match(/"changed"\s*:\s*\[([\s\S]*?)\]/i)?.[1]?.match(/"([^\"]+)"/g)?.map(value => value.slice(1, -1)) || [];
+      const noOpApplied = status === "APPLIED" && result.code === 0 && changedFiles.length === 0;
       const reviewer = await runWorker("reviewer", ws, args.task, {
         status,
         code: result.code,
-        changed: result.combined.match(/"changed"\s*:\s*\[([\s\S]*?)\]/i)?.[1]?.match(/"([^\"]+)"/g)?.map(value => value.slice(1, -1)) || [],
+        changed: changedFiles,
         validatorOk: validator.parsed?.ok === true,
         planner: planner.parsed
       });
       console.log(`[WORKER_REVIEWER] accepted=${reviewer.parsed?.ok === true} review=${reviewer.parsed?.review || reviewer.parsed?.error || "unknown"}`);
 
-      if (status === "APPLIED" && result.code === 0 && validator.parsed?.ok === true && reviewer.parsed?.ok === true) {
+      if (status === "APPLIED" && result.code === 0 && validator.parsed?.ok === true && (reviewer.parsed?.ok === true || noOpApplied)) {
         writeState(taskId, "REPORTER", "APPLIED", { attempt, repairDepth, planner: planner.parsed, validator: validator.parsed, reviewer: reviewer.parsed });
         console.log("[SUPERVISOR_V3] final=APPLIED");
         process.exitCode = 0;

@@ -459,6 +459,24 @@ export async function repairFailure({ failureText, taskId }) {
     return { action, signature: sig, changed: [] };
   }
 
+  // Browser synthesis is the configured code worker for this installation.
+  // Do not turn a missing optional repair-model key into a control-plane
+  // crash; report a safe stop and let the original task result stand.
+  if (!SYNTH_KEY) {
+    appendHistory({
+      taskId,
+      signature: sig,
+      action,
+      outcome: "repair_synthesis_unavailable"
+    });
+    return {
+      action: "stop",
+      signature: sig,
+      changed: [],
+      reason: "repair_synthesis_unavailable"
+    };
+  }
+
   const candidate = await synthesizeRepair({
     failureText,
     files,
