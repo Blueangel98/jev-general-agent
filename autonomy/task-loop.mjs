@@ -6,7 +6,8 @@ import {
 } from "node:url";
 
 import {
-  generatePatchPlan
+  generatePatchPlan,
+  browserSynthesisEnabled
 } from "../synthesis/provider.mjs";
 
 import {
@@ -441,6 +442,193 @@ function discard(
   );
 }
 
+function incrementalTimeout(spec) {
+  return Number(
+    spec.timeoutMs ||
+    process.env.JEV_DIRECT_AUTONOMY_TIMEOUT_MS ||
+    3600000
+  );
+}
+
+function rollbackIncrementalBackups(backups) {
+  for (const backup of [...backups].reverse()) {
+    try { rollback(backup); } catch {}
+  }
+}
+
+async function runIncrementalBrowserTask({ spec, workspace, baseContext }) {
+  const timeoutMs = incrementalTimeout(spec);
+  const acceptanceCommands = Array.isArray(spec.acceptanceCommands)
+    ? spec.acceptanceCommands
+    : [];
+  const autoProjectTests = spec.autoProjectTests !== false;
+  const backups = [];
+  const changed = [];
+  const stepReports = [];
+
+  // Capture the real pre-task test baseline once. Later milestone checks are
+  // syntax-only because an early milestone may intentionally precede the
+  // files that its final project tests import.
+  const baseline = autoProjectTests
+    ? runValidation(workspace, [], {
+        acceptanceCommands: [],
+        autoProjectTests: true,
+        timeoutMs,
+        allowSyntaxOnly: true
+      })
+    : { projectTests: [] };
+
+  const currentContext = () => [
+    String(spec.context || ""),
+    repoContext(
+      workspace,
+      Array.isArray(spec.contextFiles) ? spec.contextFiles : []
+    )
+  ].filter(Boolean).join("\n\n");
+
+  const applyStep = async ({ index, total, step, candidate }) => {
+    const operations = Array.isArray(candidate?.operations)
+      ? candidate.operations
+      : [];
+    if (operations.length === 0) {
+      console.log(`[AUTONOMY] step=${index + 1}/${total} skipped=no_changes title=${step.title}`);
+      stepReports.push({
+        index,
+        title: step.title,
+        status: "SKIPPED",
+        changed: []
+      });
+      return;
+    }
+
+    const report = evaluateCandidate({
+      workspace,
+      candidate,
+      acceptanceCommands: [],
+      autoProjectTests: false,
+      timeoutMs,
+      allowSyntaxOnly: true
+    });
+    console.log(`[SANDBOX] step=${index + 1}/${total} candidate=${candidate.id} pass=${report.pass}`);
+    if (!report.pass) {
+      throw new Error(
+        `Step ${index + 1} failed sandbox verification: ${JSON.stringify(report)}`
+      );
+    }
+
+    const selection = await selectCandidate({
+      task: `${spec.task}\n\nCURRENT MILESTONE: ${step.title}`,
+      candidates: [candidate],
+      reports: [report]
+    });
+    console.log(`[JEV_SELECT] step=${index + 1}/${total} decision=${selection.decision} candidate=${selection.candidateId || "none"}`);
+    if (selection.decision !== "apply") {
+      throw new Error(`JEV rejected milestone ${step.title}: ${selection.reason || "no apply decision"}`);
+    }
+
+    const backup = backupTargets(workspace, candidate);
+    try {
+      const applied = applyOperations(workspace, candidate, { live: true });
+      const verification = runValidation(workspace, applied.changed, {
+        acceptanceCommands: [],
+        autoProjectTests: false,
+        timeoutMs,
+        allowSyntaxOnly: true
+      });
+      if (!verification.pass) {
+        rollback(backup);
+        throw new Error(`Live milestone verification failed for ${step.title}: ${JSON.stringify(verification)}`);
+      }
+      backups.push(backup);
+      changed.push(...applied.changed);
+      stepReports.push({
+        index,
+        title: step.title,
+        status: "APPLIED",
+        candidateId: candidate.id,
+        changed: applied.changed,
+        verification
+      });
+      console.log(`[AUTONOMY] step=${index + 1}/${total} applied files=${applied.changed.join(",")}`);
+    } catch (error) {
+      if (!backups.includes(backup)) {
+        try { rollback(backup); } catch {}
+      }
+      throw error;
+    }
+  };
+
+  try {
+    await generatePatchPlan({
+      task: spec.task,
+      context: baseContext,
+      contextProvider: async () => currentContext(),
+      onStep: applyStep
+    });
+
+    const finalChanged = [...new Set(changed)];
+    const finalVerification = runValidation(workspace, finalChanged, {
+      acceptanceCommands,
+      autoProjectTests,
+      timeoutMs,
+      baselineProjectTests: Array.isArray(baseline.projectTests)
+        ? baseline.projectTests
+        : [],
+      allowSyntaxOnly: spec.allowSyntaxOnly === true
+    });
+
+    if (!finalVerification.pass) {
+      rollbackIncrementalBackups(backups);
+      history({
+        task: spec.task,
+        result: "incremental_rolled_back_final_verification_failed",
+        changed: finalChanged,
+        stepReports,
+        verification: finalVerification
+      });
+      recordExperience({
+        task: spec.task,
+        outcome: "incremental_rolled_back",
+        changed: finalChanged,
+        verification: finalVerification
+      });
+      console.log(JSON.stringify({
+        status: "ROLLED_BACK",
+        reason: "Final verification failed after incremental milestones",
+        changed: finalChanged,
+        stepReports,
+        verification: finalVerification
+      }, null, 2));
+      process.exitCode = 3;
+      return;
+    }
+
+    for (const backup of backups) discard(backup);
+    history({
+      task: spec.task,
+      result: "incremental_applied",
+      changed: finalChanged,
+      stepReports,
+      verification: finalVerification
+    });
+    recordExperience({
+      task: spec.task,
+      outcome: "incremental_applied",
+      changed: finalChanged,
+      verification: finalVerification
+    });
+    console.log(JSON.stringify({
+      status: "APPLIED",
+      changed: finalChanged,
+      stepReports,
+      verification: finalVerification
+    }, null, 2));
+  } catch (error) {
+    rollbackIncrementalBackups(backups);
+    throw error;
+  }
+}
+
 async function main() {
   const specFile =
     process.argv[2];
@@ -530,6 +718,19 @@ async function main() {
         4
       )
     );
+
+  if (
+    browserSynthesisEnabled() &&
+    process.env.JEV_INCREMENTAL_APPLY !== "0"
+  ) {
+    console.log("[AUTONOMY] incremental_browser_apply=true");
+    await runIncrementalBrowserTask({
+      spec,
+      workspace,
+      baseContext
+    });
+    return;
+  }
 
   let feedback =
     "";

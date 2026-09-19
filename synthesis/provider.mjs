@@ -430,7 +430,7 @@ END PREVIOUS OUTPUT`;
   }
 }
 
-async function generateBrowserPatchPlan({ task, context }) {
+async function generateBrowserPatchPlan({ task, context, onStep, contextProvider }) {
   const steps = deriveSynthesisSteps(task);
   const completed = [];
   const plans = [];
@@ -440,9 +440,12 @@ async function generateBrowserPatchPlan({ task, context }) {
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
     console.error(`[SYNTHESIS] step=${index + 1}/${steps.length} title=${step.title}`);
+    const stepContext = typeof contextProvider === "function"
+      ? await contextProvider({ index, total: steps.length, step, completed })
+      : context;
     const generated = await generateOneBrowserPatchPlan(buildBrowserStepPrompt({
       task,
-      context,
+      context: stepContext,
       step,
       index,
       total: steps.length,
@@ -460,6 +463,16 @@ async function generateBrowserPatchPlan({ task, context }) {
         ? candidate.operations.map(operation => operation.path).filter(Boolean)
         : []
     });
+    if (typeof onStep === "function") {
+      await onStep({
+        index,
+        total: steps.length,
+        step,
+        generated,
+        candidate,
+        completed
+      });
+    }
   }
 
   return {
@@ -805,13 +818,15 @@ export function synthesisConfigured() {
 
 export async function generatePatchPlan({
   task,
-  context
+  context,
+  onStep,
+  contextProvider
 }) {
   const config =
     synthesisConfig();
 
   if (browserSynthesisConfigured()) {
-    return generateBrowserPatchPlan({ task, context });
+    return generateBrowserPatchPlan({ task, context, onStep, contextProvider });
   }
 
   if (
@@ -870,6 +885,10 @@ Schema:
       ]
     }
   ]
+}
+
+export function browserSynthesisEnabled() {
+  return browserSynthesisConfigured();
 }
 
 Allowed operations:
