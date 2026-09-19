@@ -32,6 +32,17 @@ async function createChatGptPage() {
   return httpJson(`${cdpUrl}/json/new?https://chatgpt.com/`, "PUT");
 }
 
+async function closePreviousChatGptPages() {
+  const targets = await httpJson(`${cdpUrl}/json/list`);
+  const pages = targets.filter(item =>
+    item.type === "page" && /^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//i.test(item.url || "")
+  );
+  for (const page of pages) {
+    try { await httpJson(`${cdpUrl}/json/close/${encodeURIComponent(page.id)}`); }
+    catch { /* A page may already be closing; continue with the fresh tab. */ }
+  }
+}
+
 class CdpClient {
   constructor(url) {
     this.url = url;
@@ -106,6 +117,7 @@ async function targetPage() {
 async function withPage(callback, { fresh = false } = {}) {
   let created = null;
   if (fresh) {
+    await closePreviousChatGptPages();
     created = await createChatGptPage();
     await sleep(3000);
   }
