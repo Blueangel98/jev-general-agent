@@ -944,7 +944,7 @@ catch (
     );
 
   const retryableSynthesisFailure =
-    /AbortError|aborted|timeout|timed out|ResourceExhausted|HTTP\s*(?:429|500|502|503|504)|status[=: ]+(?:429|500|502|503|504)/i
+    /Synthesis provider is not configured|AbortError|aborted|timeout|timed out|ResourceExhausted|HTTP\s*(?:429|500|502|503|504)|status[=: ]+(?:429|500|502|503|504)/i
       .test(
         errorText
       );

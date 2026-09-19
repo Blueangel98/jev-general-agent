@@ -1,4 +1,17 @@
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const SYNTHESIS_POLICY_FILE = path.join(ROOT, "config", "synthesis.json");
+
+function synthesisPolicy() {
+  try {
+    return JSON.parse(fs.readFileSync(SYNTHESIS_POLICY_FILE, "utf8").replace(/^\uFEFF/, ""));
+  } catch {
+    return { enabled: false };
+  }
+}
 function stripJsonFence(text) {
   const raw =
     String(text || "")
@@ -23,7 +36,7 @@ function isTransientStatus(status) {
 }
 
 const SYNTH_FAILOVER_TRACE_FILE =
-  "C:\\Users\\Orhan\\jev-general-agent\\logs\\synthesis-failover.jsonl";
+  path.join(ROOT, "logs", "synthesis-failover.jsonl");
 
 function appendSynthFailoverTrace(
   event,
@@ -31,7 +44,7 @@ function appendSynthFailoverTrace(
 ) {
   try {
     fs.mkdirSync(
-      "C:\\Users\\Orhan\\jev-general-agent\\logs",
+      path.dirname(SYNTH_FAILOVER_TRACE_FILE),
       {
         recursive:
           true
@@ -295,7 +308,12 @@ async function synthFetchWithFallback(
 }
 
 export function synthesisConfig() {
+  const policy = synthesisPolicy();
+
   return {
+    enabled: policy.enabled === true,
+    provider: policy.provider || "disabled",
+
     baseUrl:
       process.env.JEV_SYNTH_BASE_URL || "",
 
@@ -330,6 +348,7 @@ export function synthesisConfigured() {
     synthesisConfig();
 
   return Boolean(
+    config.enabled &&
     config.baseUrl &&
     config.apiKey &&
     config.model

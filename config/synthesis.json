@@ -2,7 +2,7 @@
   "enabled": false,
   "mode": "typesafe-only",
   "localFallback": false,
-  "provider": "openai-compatible",
+  "provider": "disabled",
   "timeoutMs": 120000,
   "maxCandidates": 3,
   "allowedOperations": [

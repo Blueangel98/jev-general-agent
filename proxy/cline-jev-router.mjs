@@ -1590,7 +1590,7 @@ function mutationReportFromEvidence(evidence) {
     "APPLIED"
   ) {
     lines.push(
-      "Candidate doÄŸrulama kapÄ±larÄ±ndan geÃ§erek Ã§alÄ±ÅŸma alanÄ±na uygulandÄ±."
+      "Candidate doğrulama kapılarından geçerek çalışma alanına uygulandı."
     );
   }
   else if (
@@ -1598,7 +1598,7 @@ function mutationReportFromEvidence(evidence) {
     "NEEDS_VERIFICATION"
   ) {
     lines.push(
-      "CanlÄ± uygulama yapÄ±lmadÄ±; deterministik doÄŸrulama gereksinimi karÅŸÄ±lanmadÄ±."
+      "Canlı uygulama yapılmadı; deterministik doğrulama gereksinimi karşılanmadı."
     );
   }
   else if (
@@ -1606,7 +1606,7 @@ function mutationReportFromEvidence(evidence) {
     "ROLLED_BACK"
   ) {
     lines.push(
-      "DoÄŸrulama baÅŸarÄ±sÄ±z olduÄŸu iÃ§in deÄŸiÅŸiklik geri alÄ±ndÄ±."
+      "Doğrulama başarısız olduğu için değişiklik geri alındı."
     );
   }
   else if (
@@ -1614,7 +1614,7 @@ function mutationReportFromEvidence(evidence) {
     "REJECTED"
   ) {
     lines.push(
-      "Candidate reddedildi ve canlÄ± Ã§alÄ±ÅŸma alanÄ±na uygulanmadÄ±."
+      "Candidate reddedildi ve canlı çalışma alanına uygulanmadı."
     );
   }
   else if (
@@ -1624,7 +1624,7 @@ function mutationReportFromEvidence(evidence) {
     "ERROR"
   ) {
     lines.push(
-      "Autonomy yÃ¼rÃ¼tmesi baÅŸarÄ±sÄ±z oldu; sonuÃ§ canlÄ± uygulama olarak kabul edilmedi."
+      "Autonomy yürütmesi başarısız oldu; sonuç canlı uygulama olarak kabul edilmedi."
     );
   }
 
@@ -1640,12 +1640,12 @@ function mutationReportFromEvidence(evidence) {
     changed.length
   ) {
     lines.push(
-      `DeÄŸiÅŸen dosyalar: ${changed.join(", ")}`
+      `Değişen dosyalar: ${changed.join(", ")}`
     );
   }
 
   lines.push(
-    "Bu sonuÃ§ 4014 mutation finalizer tarafÄ±ndan sonlandÄ±rÄ±ldÄ±; legacy 4012 test parser devreye alÄ±nmadÄ±."
+    "Bu sonuç 4014 mutation finalizer tarafından sonlandırıldı; legacy 4012 test parser devreye alınmadı."
   );
 
   return lines.join("\n");

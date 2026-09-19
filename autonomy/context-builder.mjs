@@ -207,6 +207,50 @@ function analyzeFile(
   };
 }
 
+function packageRunner(root) {
+  if (
+    fs.existsSync(path.join(root, "pnpm-lock.yaml")) ||
+    fs.existsSync(path.join(root, "pnpm-workspace.yaml"))
+  ) {
+    return "pnpm run";
+  }
+
+  if (
+    fs.existsSync(path.join(root, "yarn.lock"))
+  ) {
+    return "yarn";
+  }
+
+  if (
+    fs.existsSync(path.join(root, "bun.lockb")) ||
+    fs.existsSync(path.join(root, "bun.lock"))
+  ) {
+    return "bun run";
+  }
+
+  return "npm run";
+}
+
+function projectSourceFiles(root) {
+  return walk(root)
+    .filter(file =>
+      /\.(?:js|mjs|cjs|py)$/i.test(file.rel)
+    )
+    .map(file => file.rel.replace(/\\/g, "/"));
+}
+
+function javascriptSmokeCommand(root) {
+  const files = projectSourceFiles(root)
+    .filter(file => /\.(?:js|mjs|cjs)$/i.test(file))
+    .slice(0, 80);
+
+  if (!files.length) return null;
+
+  return files
+    .map(file => `node --check "${file.replace(/"/g, '""')}"`)
+    .join(" && ");
+}
+
 export function detectVerificationSupport(root) {
   const detected = [];
 
@@ -234,22 +278,25 @@ export function detectVerificationSupport(root) {
             )
         );
 
-      const testScript =
-        pkg
-          ?.scripts
-          ?.test;
+      const scripts = pkg?.scripts || {};
+      const runner = packageRunner(root);
+      const testScript = scripts.test;
 
       if (
-        typeof testScript ===
-          "string" &&
+        typeof testScript === "string" &&
         testScript.trim() &&
-        !/no test specified/i.test(
-          testScript
-        )
+        !/no test specified/i.test(testScript)
       ) {
-        detected.push(
-          "npm test"
-        );
+        detected.push(`${runner === "npm run" ? "npm test" : `${runner} test`}`);
+      }
+
+      if (!detected.length) {
+        for (const name of ["build", "typecheck", "lint", "check", "verify"]) {
+          if (typeof scripts[name] === "string" && scripts[name].trim()) {
+            detected.push(`${runner} ${name}`);
+            break;
+          }
+        }
       }
     }
     catch {
@@ -302,6 +349,42 @@ export function detectVerificationSupport(root) {
     detected.push(
       "./gradlew test"
     );
+  }
+
+  if (
+    detected.length === 0 &&
+    fs.existsSync(path.join(root, "pom.xml"))
+  ) {
+    detected.push("mvn test");
+  }
+
+  if (
+    detected.length === 0 &&
+    fs.existsSync(path.join(root, "Cargo.toml"))
+  ) {
+    detected.push("cargo test");
+  }
+
+  if (
+    detected.length === 0 &&
+    fs.existsSync(path.join(root, "go.mod"))
+  ) {
+    detected.push("go test ./...");
+  }
+
+  if (
+    detected.length === 0 &&
+    projectSourceFiles(root).some(file => /\.py$/i.test(file))
+  ) {
+    detected.push("python -m compileall -q .");
+  }
+
+  if (
+    detected.length === 0 &&
+    !fs.existsSync(path.join(root, "tsconfig.json"))
+  ) {
+    const javascriptSmoke = javascriptSmokeCommand(root);
+    if (javascriptSmoke) detected.push(javascriptSmoke);
   }
 
   return detected;

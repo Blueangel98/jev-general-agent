@@ -1,6 +1,6 @@
 # JEV General Agent
 
-JEV is a local task runner and Cline-compatible proxy for general development work. The decision/control plane remains local; configured providers are used for planning, synthesis and repair decisions.
+JEV is a local task runner and Cline-compatible proxy for general development work. The decision/control plane remains local and Typesafe JEV supplies structured decisions; no external code-synthesis model is enabled by default.
 
 ## Start and stop
 
@@ -61,10 +61,12 @@ Authentication is handled by the user's Git credential manager or GitHub CLI. No
 
 Live changes require semantic verification (project tests or an explicitly safe acceptance command). Syntax-only mode is available explicitly with `-AllowSyntaxOnly`.
 
+When a project has no test suite, the verifier now looks for deterministic project checks such as `build`, `typecheck`, `lint`, or `check`. For source-only Python projects it uses `python -m compileall -q .`; for source-only JavaScript projects it checks each JavaScript module with `node --check`. These are smoke/static checks, not a claim that untested behavior is semantically correct.
+
 ## Safety behavior
 
 Candidates are applied in a temporary copy first, then independently verified. Live changes are backed up and rolled back if verification fails. Validation rejects empty successful command output, unknown validation types, path traversal, and symlink/junction escapes. Task locking uses atomic creation and an alive process is not evicted solely because its heartbeat is old.
 
-Only the JEV Typesafe provider is supported by the published package. Qwen, Ollama, NVIDIA/Gemma and other provider fallbacks are disabled. The Typesafe credential is read from the user's secure environment and is never written to task output.
+Only the JEV Typesafe provider is enabled by the published package. Qwen, Ollama, NVIDIA/Gemma and other provider fallbacks are disabled. The synthesis policy is enforced from `config/synthesis.json`, so stale `JEV_SYNTH_*` environment variables cannot silently activate another model. The Typesafe credential is read from the user's secure environment and is never written to task output.
 
 The Codex setup session is not a permanent model service. A task cannot run while the computer is powered off; after restart, persisted state and logs remain available for recovery/inspection.
