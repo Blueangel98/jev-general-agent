@@ -1,8 +1,8 @@
 {
-  "enabled": false,
-  "mode": "typesafe-only",
+  "enabled": true,
+  "mode": "supervised-browser-worker",
   "localFallback": false,
-  "provider": "disabled",
+  "provider": "chatgpt-browser",
   "timeoutMs": 120000,
   "maxCandidates": 3,
   "allowedOperations": [

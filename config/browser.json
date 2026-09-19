@@ -1,0 +1,23 @@
+{
+  "enabled": true,
+  "cdpUrl": "http://127.0.0.1:9222",
+  "approvalRequiredFor": [
+    "login",
+    "form_submit",
+    "file_upload",
+    "external_write",
+    "financial_action",
+    "public_message"
+  ],
+  "neverRead": [
+    "password",
+    "one_time_code",
+    "api_key",
+    "private_key",
+    "credit_card"
+  ],
+  "allowedDomains": [
+    "chatgpt.com",
+    "chat.openai.com"
+  ]
+}

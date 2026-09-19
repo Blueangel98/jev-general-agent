@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { deterministicPatchPlan } from "./deterministic-engine.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SYNTHESIS_POLICY_FILE = path.join(ROOT, "config", "synthesis.json");
+const BROWSER_BRIDGE = path.join(ROOT, "browser", "chatgpt-cdp-bridge.mjs");
 
 function synthesisPolicy() {
   try {
@@ -26,6 +28,75 @@ function stripJsonFence(text) {
   return fenced
     ? fenced[1]
     : raw;
+}
+
+function parseJsonContent(text) {
+  const raw = stripJsonFence(text);
+  try { return JSON.parse(raw); } catch {}
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first >= 0 && last > first) return JSON.parse(raw.slice(first, last + 1));
+  throw new Error("Browser synthesis response did not contain a JSON patch plan");
+}
+
+function browserSynthesisConfigured() {
+  const policy = synthesisPolicy();
+  return policy.enabled === true &&
+    policy.provider === "chatgpt-browser" &&
+    process.env.JEV_BROWSER_ALLOW_TRANSMIT === "1";
+}
+
+function runBrowserBridge(prompt) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [BROWSER_BRIDGE, "send"], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `ChatGPT browser worker exited with code ${code}`));
+        return;
+      }
+      try { resolve(JSON.parse(stdout)); }
+      catch (error) { reject(new Error(`ChatGPT browser worker returned invalid JSON: ${error.message}`)); }
+    });
+    child.stdin.end(JSON.stringify({ prompt }));
+  });
+}
+
+async function generateBrowserPatchPlan({ task, context }) {
+  const prompt = `You are the code-writing worker inside a supervised local coding agent.
+
+Return JSON only with this exact shape:
+{"candidates":[{"id":"candidate-1","summary":"...","rationale":"...","operations":[{"type":"create_file","path":"relative/path","content":"complete file"},{"type":"exact_replace","path":"relative/path","old_text":"exact text","new_text":"replacement"}]}]}
+
+Rules:
+- Write the requested code; do not merely explain it.
+- Use only relative paths inside the selected workspace.
+- Existing files must use exact_replace; new files use create_file.
+- Do not modify supervisor.mjs or runtime/stable-agent.mjs.
+- Preserve existing behavior unless the task requests a change.
+- Produce a complete, testable patch.
+- Do not include markdown fences or commentary outside the JSON.
+
+TASK:
+${task}
+
+WORKSPACE EVIDENCE:
+${context}`;
+  const response = await runBrowserBridge(prompt);
+  return {
+    latencyMs: 0,
+    attempts: 1,
+    provider: "chatgpt-browser",
+    plan: parseJsonContent(response.response)
+  };
 }
 
 function sleep(ms) {
@@ -349,10 +420,8 @@ export function synthesisConfigured() {
     synthesisConfig();
 
   return Boolean(
-    config.enabled &&
-    config.baseUrl &&
-    config.apiKey &&
-    config.model
+    (config.enabled && config.baseUrl && config.apiKey && config.model) ||
+    browserSynthesisConfigured()
   );
 }
 
@@ -362,6 +431,10 @@ export async function generatePatchPlan({
 }) {
   const config =
     synthesisConfig();
+
+  if (browserSynthesisConfigured()) {
+    return generateBrowserPatchPlan({ task, context });
+  }
 
   if (
     !synthesisConfigured()
