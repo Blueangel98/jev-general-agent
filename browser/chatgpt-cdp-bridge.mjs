@@ -133,7 +133,6 @@ async function send(prompt) {
     throw new Error("Browser transmission is disabled; set JEV_BROWSER_ALLOW_TRANSMIT=1 after user approval");
   }
   return withPage(async client => {
-    await client.call("Page.navigate", { url: "https://chatgpt.com/" });
     await client.call("Page.bringToFront");
     let before = await client.evaluate(PAGE_STATE);
     for (let attempt = 0; attempt < 20 && !before.composer; attempt++) {
@@ -142,6 +141,9 @@ async function send(prompt) {
     }
     if (!before.loggedIn || !before.composer) {
       throw new Error("ChatGPT is not ready; complete login and open a new chat first");
+    }
+    if (before.assistantCount > 0) {
+      throw new Error("Open a fresh ChatGPT chat before starting a supervised code task");
     }
 
     const focused = await client.evaluate(`(() => {
