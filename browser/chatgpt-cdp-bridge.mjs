@@ -591,6 +591,8 @@ async function send(prompt) {
     let sawAssistant = false;
     let sawGenerating = false;
     let idlePolls = 0;
+    let lastAssistantLength = -1;
+    let stableAssistantPolls = 0;
     while (Date.now() < deadline) {
       await sleep(1000);
       const control = await client.evaluate(PAGE_CONTROL_STATE);
@@ -598,16 +600,24 @@ async function send(prompt) {
       if (control.generating) {
         sawGenerating = true;
         idlePolls = 0;
+        stableAssistantPolls = 0;
         continue;
       }
-      if (sawAssistant && sawGenerating) {
+      if (sawAssistant) {
         idlePolls += 1;
-        // Require two idle polls after observing a real generation state.
-        // Only now is assistant text read, so partial streaming content cannot
-        // be mistaken for a completed patch plan.
-        if (idlePolls >= 2) {
-          const current = await client.evaluate(PAGE_STATE);
-          if (current.assistantCount > before.assistantCount && current.lastAssistant) {
+        // Read assistant text only after an idle poll. This covers normal
+        // streaming and fast responses that finish before the first control
+        // poll observes ChatGPT's generating marker.
+        const current = await client.evaluate(PAGE_STATE);
+        if (current.assistantCount > before.assistantCount && current.lastAssistant) {
+          if (current.lastAssistant.length === lastAssistantLength) {
+            stableAssistantPolls += 1;
+          } else {
+            lastAssistantLength = current.lastAssistant.length;
+            stableAssistantPolls = 0;
+          }
+          const requiredIdlePolls = sawGenerating ? 2 : 3;
+          if (idlePolls >= requiredIdlePolls && stableAssistantPolls >= 1) {
             return { before, after: current, temporaryChat: temporaryToggle, speedMode, response: current.lastAssistant };
           }
         }

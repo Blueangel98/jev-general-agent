@@ -145,9 +145,10 @@ Rules:
 - Do not modify supervisor.mjs or runtime/stable-agent.mjs.
 - Preserve existing behavior unless the task requests a change.
 - Produce a complete, testable patch.
-- Output strict RFC 8259 JSON that can be parsed by JSON.parse.
+- Reply as plain text containing exactly one JSON object. Do not use a markdown code fence, attachment, bullet list, or explanatory sentence before or after it.
+- The plain-text response must be strict RFC 8259 JSON that can be parsed by JSON.parse.
 - Escape every double quote inside a JSON string as \\"; never place raw unescaped quotes inside summary, rationale, paths, or file contents.
-- Before sending, validate the complete response mentally as one JSON object. If no change is needed, return operations as an empty array.
+- Validate the complete plain-text response as one JSON object before sending. If no change is needed, return operations as an empty array.
 - Do not include markdown fences or commentary outside the JSON.
 
 TASK:
