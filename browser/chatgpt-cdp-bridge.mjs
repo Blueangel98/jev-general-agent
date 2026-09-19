@@ -263,7 +263,7 @@ async function attachPromptFile(client, content) {
   }
   // ChatGPT may show the document card before its upload state has settled.
   // Give the composer time to promote the attachment to a sendable item.
-  await sleep(2500);
+  await sleep(Number(process.env.JEV_BROWSER_ATTACHMENT_SETTLE_MS || 10000));
   return filePath;
 }
 
@@ -377,7 +377,19 @@ async function send(prompt) {
 
     const sendDeadline = Date.now() + 15000;
     let clicked = false;
+    let submissionAttempts = 0;
     while (Date.now() < sendDeadline && !clicked) {
+      const observedBeforeSubmit = await client.evaluate(PAGE_CONTROL_STATE);
+      if (observedBeforeSubmit.assistantCount > before.assistantCount ||
+        observedBeforeSubmit.generating ||
+        observedBeforeSubmit.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5))) {
+        clicked = true;
+        break;
+      }
+      if (submissionAttempts >= 3) {
+        await sleep(500);
+        continue;
+      }
       const sendState = await client.evaluate(`(() => {
         const composer = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
           .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
@@ -391,6 +403,7 @@ async function send(prompt) {
         };
       })()`);
       if (sendState.found && !sendState.disabled && sendState.composerLength > 0) {
+        submissionAttempts += 1;
         await client.evaluate(`(() => {
           const composer = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
             .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
@@ -454,7 +467,6 @@ async function send(prompt) {
           clicked = afterRequestSubmit.assistantCount > before.assistantCount ||
             afterRequestSubmit.generating ||
             afterRequestSubmit.composerLength < Math.max(1, Math.floor(composerPrompt.length * 0.5));
-          if (!clicked) break;
         }
       }
       if (!clicked) await sleep(250);
