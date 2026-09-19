@@ -385,7 +385,7 @@ async function preferFastGeneration(client) {
   };
 }
 
-async function send(prompt) {
+async function send(prompt, { fresh = true } = {}) {
   if (process.env.JEV_BROWSER_ALLOW_TRANSMIT !== "1") {
     throw new Error("Browser transmission is disabled; set JEV_BROWSER_ALLOW_TRANSMIT=1 after user approval");
   }
@@ -396,7 +396,7 @@ async function send(prompt) {
     bridgeLog("page_ready");
     await client.call("Page.bringToFront");
     const before = await waitForChatGptReady(client);
-    if (before.assistantCount > 0) {
+    if (fresh && before.assistantCount > 0) {
       throw new Error("The fresh ChatGPT page already contains an assistant response");
     }
 
@@ -673,10 +673,73 @@ async function send(prompt) {
       }
     }
     throw new Error("ChatGPT response timed out before a verified generation-complete state was available");
-    }, { fresh: true });
+    }, { fresh });
   } finally {
     if (promptFilePath) fs.rmSync(promptFilePath, { force: true });
   }
+}
+
+function framedPayload(buffer) {
+  const delimiter = buffer.indexOf(Buffer.from("\r\n\r\n"));
+  if (delimiter < 0) return null;
+  const header = buffer.slice(0, delimiter).toString("utf8");
+  const match = header.match(/(?:^|\r\n)Content-Length:\s*(\d+)/i);
+  if (!match) throw new Error("Framed bridge request is missing Content-Length");
+  const length = Number(match[1]);
+  const start = delimiter + 4;
+  if (buffer.length < start + length) return null;
+  return {
+    body: buffer.slice(start, start + length).toString("utf8"),
+    rest: buffer.slice(start + length)
+  };
+}
+
+function writeFramedResponse(status, body) {
+  const payload = Buffer.from(String(body || ""), "utf8");
+  process.stdout.write(`Status: ${status}\r\nContent-Length: ${payload.length}\r\n\r\n`);
+  process.stdout.write(payload);
+}
+
+async function serveFramedText() {
+  let input = Buffer.alloc(0);
+  let queue = Promise.resolve();
+  let ended = false;
+  let reuseCurrentChat = false;
+  let finish;
+  const finished = new Promise(resolve => { finish = resolve; });
+
+  const drain = () => {
+    while (true) {
+      const frame = framedPayload(input);
+      if (!frame) break;
+      input = frame.rest;
+      queue = queue.then(async () => {
+        try {
+          const result = await send(frame.body, { fresh: !reuseCurrentChat });
+          reuseCurrentChat = true;
+          writeFramedResponse(200, result.response || "");
+        } catch (error) {
+          // A failed page/session must not poison the next request. The next
+          // step will create a fresh temporary chat and close stale ChatGPT
+          // pages before retrying.
+          reuseCurrentChat = false;
+          writeFramedResponse(500, String(error?.stack || error));
+        }
+      });
+    }
+  };
+
+  process.stdin.on("data", chunk => {
+    input = Buffer.concat([input, Buffer.from(chunk)]);
+    drain();
+  });
+  process.stdin.on("end", () => {
+    ended = true;
+    finish();
+  });
+
+  if (!ended) await finished;
+  await queue;
 }
 
 async function main() {
@@ -689,6 +752,10 @@ async function main() {
     const input = JSON.parse(fs.readFileSync(0, "utf8"));
     if (typeof input?.prompt !== "string" || !input.prompt.trim()) throw new Error("stdin JSON must contain a non-empty prompt");
     process.stdout.write(JSON.stringify(await send(input.prompt), null, 2));
+    return;
+  }
+  if (command === "serve") {
+    await serveFramedText();
     return;
   }
   throw new Error(`Unknown command: ${command}`);

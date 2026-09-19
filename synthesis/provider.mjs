@@ -157,29 +157,93 @@ function browserSynthesisConfigured() {
     process.env.JEV_BROWSER_ALLOW_TRANSMIT === "1";
 }
 
+let persistentBrowserBridge = null;
+
+function parseFramedResponse(state) {
+  while (true) {
+    const delimiter = state.buffer.indexOf(Buffer.from("\r\n\r\n"));
+    if (delimiter < 0) return;
+    const header = state.buffer.slice(0, delimiter).toString("utf8");
+    const status = Number(header.match(/(?:^|\r\n)Status:\s*(\d+)/i)?.[1] || 500);
+    const length = Number(header.match(/(?:^|\r\n)Content-Length:\s*(\d+)/i)?.[1]);
+    if (!Number.isFinite(length) || length < 0) {
+      const error = new Error("ChatGPT browser bridge returned an invalid frame header");
+      for (const pending of state.pending.splice(0)) pending.reject(error);
+      state.buffer = Buffer.alloc(0);
+      return;
+    }
+    const start = delimiter + 4;
+    if (state.buffer.length < start + length) return;
+    const body = state.buffer.slice(start, start + length).toString("utf8");
+    state.buffer = state.buffer.slice(start + length);
+    const pending = state.pending.shift();
+    if (!pending) continue;
+    if (status >= 400) pending.reject(new Error(body || `ChatGPT browser bridge failed with status ${status}`));
+    else pending.resolve({ response: body, latencyMs: Date.now() - pending.startedAt, transport: "persistent-framed-text" });
+  }
+}
+
+function persistentBridgeState() {
+  if (persistentBrowserBridge?.child && !persistentBrowserBridge.child.killed) {
+    return persistentBrowserBridge;
+  }
+
+  const child = spawn(process.execPath, [BROWSER_BRIDGE, "serve"], {
+    cwd: ROOT,
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  const state = {
+    child,
+    buffer: Buffer.alloc(0),
+    pending: [],
+    stderr: ""
+  };
+  persistentBrowserBridge = state;
+  child.stdout.on("data", chunk => {
+    state.buffer = Buffer.concat([state.buffer, Buffer.from(chunk)]);
+    parseFramedResponse(state);
+  });
+  child.stderr.on("data", chunk => {
+    state.stderr = `${state.stderr}${chunk}`.slice(-12000);
+  });
+  const failed = error => {
+    const reason = error instanceof Error ? error : new Error(String(error));
+    if (state.stderr.trim()) reason.message = `${reason.message}\n${state.stderr.trim()}`;
+    for (const pending of state.pending.splice(0)) pending.reject(reason);
+    if (persistentBrowserBridge === state) persistentBrowserBridge = null;
+  };
+  child.on("error", failed);
+  child.on("close", code => {
+    if (code !== 0 || state.pending.length) {
+      failed(new Error(`ChatGPT persistent bridge exited with code ${code}`));
+    }
+    if (persistentBrowserBridge === state) persistentBrowserBridge = null;
+  });
+  return state;
+}
+
 function runBrowserBridge(prompt) {
+  const state = persistentBridgeState();
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BROWSER_BRIDGE, "send"], {
-      cwd: ROOT,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", chunk => { stdout += chunk; });
-    child.stderr.on("data", chunk => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", code => {
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `ChatGPT browser worker exited with code ${code}`));
-        return;
-      }
-      try { resolve(JSON.parse(stdout)); }
-      catch (error) { reject(new Error(`ChatGPT browser worker returned invalid JSON: ${error.message}`)); }
-    });
-    child.stdin.end(JSON.stringify({ prompt }));
+    state.pending.push({ resolve, reject, startedAt: Date.now() });
+    const payload = Buffer.from(String(prompt), "utf8");
+    const frame = Buffer.concat([
+      Buffer.from(`Content-Length: ${payload.length}\r\n\r\n`, "utf8"),
+      payload
+    ]);
+    try {
+      state.child.stdin.write(frame);
+    } catch (error) {
+      state.pending.pop();
+      reject(error);
+    }
   });
 }
+
+process.once("exit", () => {
+  try { persistentBrowserBridge?.child.kill(); } catch {}
+});
 
 function compactSynthesisText(value, limit) {
   const text = String(value || "").trim();
