@@ -12,7 +12,7 @@ foreach ($name in @(
     "TYPESAFE_API_KEY", "JEV_URL", "JEV_MODEL",
     "JEV_WORKSPACE_ROOT", "JEV_DIRECT_AUTONOMY_TIMEOUT_MS",
     "JEV_BROWSER_CDP_URL", "JEV_BROWSER_ALLOW_TRANSMIT",
-    "JEV_BROWSER_RESPONSE_TIMEOUT_MS"
+    "JEV_BROWSER_READY_TIMEOUT_MS", "JEV_BROWSER_RESPONSE_TIMEOUT_MS"
 )) {
     $value = [Environment]::GetEnvironmentVariable($name, "User")
     if (-not [string]::IsNullOrWhiteSpace($value)) { Set-Item "Env:$name" $value }

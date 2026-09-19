@@ -202,6 +202,23 @@ async function withPage(callback, { fresh = false } = {}) {
   finally { client.close(); }
 }
 
+async function waitForChatGptReady(client) {
+  const timeoutMs = Number(process.env.JEV_BROWSER_READY_TIMEOUT_MS || 120000);
+  const deadline = Date.now() + timeoutMs;
+  let state = await client.evaluate(PAGE_STATE);
+  while (Date.now() < deadline) {
+    if (state.loggedIn && state.composer) return state;
+    await sleep(500);
+    state = await client.evaluate(PAGE_STATE);
+  }
+
+  throw new Error(
+    `ChatGPT page did not become ready within ${timeoutMs}ms ` +
+    `(loggedIn=${state.loggedIn}, composer=${state.composer}, url=${state.url}). ` +
+    "Complete login in the visible browser if needed; the bridge opens a fresh temporary chat automatically."
+  );
+}
+
 const PAGE_STATE = `(() => {
   const body = document.body?.innerText || "";
   const composers = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
@@ -378,16 +395,9 @@ async function send(prompt) {
     return await withPage(async client => {
     bridgeLog("page_ready");
     await client.call("Page.bringToFront");
-    let before = await client.evaluate(PAGE_STATE);
-    for (let attempt = 0; attempt < 20 && !before.composer; attempt++) {
-      await sleep(500);
-      before = await client.evaluate(PAGE_STATE);
-    }
-    if (!before.loggedIn || !before.composer) {
-      throw new Error("ChatGPT is not ready; complete login and open a new chat first");
-    }
+    const before = await waitForChatGptReady(client);
     if (before.assistantCount > 0) {
-      throw new Error("Open a fresh ChatGPT chat before starting a supervised code task");
+      throw new Error("The fresh ChatGPT page already contains an assistant response");
     }
 
     const temporaryToggle = await client.evaluate(`(() => {
