@@ -198,6 +198,52 @@ function extractRepairFeedback(context) {
     : "none";
 }
 
+function splitPromptChunks(body, title, limit = 7000) {
+  const text = String(body || "").trim();
+  if (text.length <= limit) return [{ title, body: text }];
+
+  const paragraphs = text.split(/\n\s*\n/).map(value => value.trim()).filter(Boolean);
+  const chunks = [];
+  let current = "";
+  const push = () => {
+    if (current) chunks.push(current);
+    current = "";
+  };
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.length > limit) {
+      push();
+      for (let offset = 0; offset < paragraph.length; offset += limit) {
+        chunks.push(paragraph.slice(offset, offset + limit));
+      }
+      continue;
+    }
+    if (current && current.length + paragraph.length + 2 > limit) push();
+    current = current ? `${current}\n\n${paragraph}` : paragraph;
+  }
+  push();
+
+  return chunks.map((chunk, index) => ({
+    title: chunks.length > 1 ? `${title} (part ${index + 1}/${chunks.length})` : title,
+    body: chunk
+  }));
+}
+
+function deriveTaskBrief(task) {
+  const text = String(task || "").trim();
+  const structured = text.match(/(?:^|\n)\s*(?:#{1,4}\s+|(?:\*\*)?M\d+\s*[—–-])/m);
+  const intro = structured ? text.slice(0, structured.index).trim() : text.slice(0, 2200);
+  const sharedLines = text
+    .split(/\r?\n/)
+    .filter(line => /workspace|secret|credential|live|paper|testnet|test|acceptance|rollback|safety|git|do not|must|zorunlu|yasak/i.test(line))
+    .slice(0, 36)
+    .join("\n");
+  return compactSynthesisText(
+    `${intro}\n\nSHARED CONSTRAINTS:\n${sharedLines}`,
+    3200
+  );
+}
+
 function deriveSynthesisSteps(task) {
   const text = String(task || "").trim();
   const milestonePattern = /(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*\*)?M(\d+)\s*[—–-]\s*([^\n*]+)(?:\*\*)?/gim;
@@ -214,15 +260,7 @@ function deriveSynthesisSteps(task) {
         body: text.slice(start, end).trim()
       };
     });
-    const grouped = [];
-    for (let index = 0; index < chunks.length; index += 3) {
-      const group = chunks.slice(index, index + 3);
-      grouped.push({
-        title: group.map(step => step.title).join("; "),
-        body: group.map(step => step.body).join("\n\n")
-      });
-    }
-    return grouped;
+    return chunks.flatMap(step => splitPromptChunks(step.body, step.title));
   }
 
   const headings = [...text.matchAll(/(?:^|\n)\s{0,3}(#{2,4})\s+([^\n]+)\s*/g)]
@@ -231,26 +269,15 @@ function deriveSynthesisSteps(task) {
       body: text.slice(match.index, index + 1 < all.length ? all[index + 1].index : text.length).trim()
     }));
 
-  if (headings.length >= 3) {
-    const grouped = [];
-    for (let index = 0; index < headings.length; index += 2) {
-      const group = headings.slice(index, index + 2);
-      grouped.push({
-        title: group.map(step => step.title).join("; "),
-        body: group.map(step => step.body).join("\n\n")
-      });
-    }
-    return grouped.slice(0, 5);
+  if (headings.length >= 1) {
+    return headings.flatMap(step => splitPromptChunks(step.body, step.title));
   }
 
-  return [{
-    title: "Current implementation slice",
-    body: text
-  }];
+  return splitPromptChunks(text, "Current implementation slice");
 }
 
 function buildBrowserStepPrompt({ task, context, step, index, total, completed }) {
-  const globalBrief = compactSynthesisText(task, 2400);
+  const taskBrief = deriveTaskBrief(task);
   const stepBrief = compactSynthesisText(step.body, 7600);
   const repairFeedback = extractRepairFeedback(context);
   const workspaceContext = repairFeedback === "none"
@@ -281,8 +308,8 @@ Rules:
 - No markdown fence, attachment, bullet list, or commentary outside the JSON.
 - Validate the complete response with JSON.parse before sending.
 
-GLOBAL TASK BRIEF:
-${globalBrief}
+TASK OBJECTIVE AND SHARED CONSTRAINTS:
+${taskBrief}
 
 CURRENT STEP REQUIREMENTS:
 ${stepBrief}
