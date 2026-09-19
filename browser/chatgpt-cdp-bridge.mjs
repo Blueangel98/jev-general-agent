@@ -294,6 +294,43 @@ async function send(prompt) {
     if (!temporaryToggle.found) throw new Error("ChatGPT temporary-chat control was not found");
     await sleep(400);
 
+    // Chrome/ChatGPT can restore an unsent draft into a newly created tab.
+    // A fresh page is not necessarily an empty composer, so clear it before
+    // attaching a task file or inserting the next prompt.
+    const restoredDraftLength = before.composerValueLength || 0;
+    if (restoredDraftLength > 0) {
+      const draftFocused = await client.evaluate(`(() => {
+        const element = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
+          .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
+        if (!element) return false;
+        element.focus();
+        return true;
+      })()`);
+      if (!draftFocused) throw new Error("ChatGPT restored a draft but its composer could not be focused");
+      await client.call("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+      await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+      await client.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
+      await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
+      await sleep(300);
+      let cleared = await client.evaluate(PAGE_CONTROL_STATE);
+      if (cleared.composerLength > 0) {
+        await client.evaluate(`(() => {
+          const element = [...document.querySelectorAll('textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"]')]
+            .filter(candidate => candidate.offsetParent !== null && !candidate.disabled).at(-1);
+          if (!element) return false;
+          element.focus();
+          document.execCommand("selectAll");
+          document.execCommand("delete");
+          return true;
+        })()`);
+        await sleep(300);
+        cleared = await client.evaluate(PAGE_CONTROL_STATE);
+      }
+      if (cleared.composerLength > 0) {
+        throw new Error(`ChatGPT restored an unsent draft that could not be cleared (length ${cleared.composerLength})`);
+      }
+    }
+
     const usePromptFile = prompt.length >= Number(process.env.JEV_BROWSER_FILE_THRESHOLD || 12000);
     let composerPrompt = prompt;
     if (usePromptFile) {
